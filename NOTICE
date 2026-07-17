@@ -1,0 +1,33 @@
+polgrad
+Copyright 2026 Saif Punjwani
+
+Licensed under the Apache License, Version 2.0.
+
+This product vendors code from the following Apache-2.0 licensed projects for
+conformance testing, under src/polgrad/conformance/_vendor/. Each vendored
+file's header records the pinned upstream commit, source paths, upstream file
+SHA256s, the definitions kept, and every edit made (import/decorator stripping
+only; kept bodies are byte-identical to upstream).
+
+1. verl
+   https://github.com/volcengine/verl
+   (redirects to https://github.com/verl-project/verl after the project rename)
+   Copyright 2024 Bytedance Ltd. and/or its affiliates
+   Copyright 2022 The HuggingFace Team. All rights reserved.
+   Licensed under the Apache License, Version 2.0.
+   Vendored file: src/polgrad/conformance/_vendor/verl_core_algos.py
+   Sources: verl/trainer/ppo/core_algos.py and verl/utils/torch_functional.py
+   at commit 74a718a492092312f1004fe25369975137388849.
+   SHA256 of the vendored file as committed:
+   a5be6b684c4b27e0fc64d1b1c8a8ae2338504b0db04862f7497e865da72dfcf5
+
+2. OpenRLHF
+   https://github.com/OpenRLHF/OpenRLHF
+   Licensed under the Apache License, Version 2.0 (the upstream LICENSE keeps
+   the unmodified Apache-2.0 template copyright line and the source files carry
+   no per-file license header; copyright rests with the OpenRLHF contributors).
+   Vendored file: src/polgrad/conformance/_vendor/openrlhf_loss.py
+   Sources: openrlhf/models/loss.py and openrlhf/models/utils.py
+   at commit bc71bb19464aca306b33080b2d2bb45d154e2f49.
+   SHA256 of the vendored file as committed:
+   caad2b3b7cd6f0d873b71f765d0ad94e7d5da4e19b9a8e0186ed105b9c6ba9f0

@@ -1,0 +1,110 @@
+"""Registry of demonstrated framework deviations from paper/reference semantics.
+
+Every :class:`Deviation` entry is backed by a test in ``tests/test_conformance.py``
+that demonstrates the exact analytic discrepancy against the vendored framework code
+(``polgrad.conformance._vendor``) at the pinned commit named in ``version``; entries
+without a demonstrating test are not registered.
+
+Contract note (deviation from contract section 4.8, per its own fix-the-math rule):
+the contract pre-registers verl's ``agg_loss("seq-mean-token-sum-norm")`` as
+``Σ_b(Σ_t m·x) / T_padded`` — "no division by B" — giving a factor ``B·norm_len/T``
+against polgrad ``TOKEN_SUM_NORM = Σ/(B·norm_len)``. At the vendored pinned commit
+``74a718a4`` the code *does* divide by ``global_batch_size`` (which defaults to the
+number of rows with at least one response token, i.e. ``B`` for polgrad-valid masks)
+before dividing by ``loss_scale_factor`` (default: the padded width
+``loss_mask.shape[-1]``). The demonstrated factor at this pin is therefore
+``norm_len/T_padded``, and that is the factor the registered entry and its test
+assert. The substance of the deviation is unchanged: the default divisor is the
+batch-dependent padded length, not Dr.GRPO's fixed generation budget.
+
+Scope note: the group-normalized advantage estimators of verl and TRL could not be
+vendored as pure functions (see the drop lists in the ``_vendor`` file headers), so
+degenerate-group behavior (polgrad raises ``ValueError`` for size-1 groups, contract
+section 4.4) has no demonstrating test here and is not registered as a
+:class:`Deviation`.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+__all__ = ["DEVIATIONS", "Deviation"]
+
+_VERL_PIN = "commit 74a718a492092312f1004fe25369975137388849 (main, fetched 2026-07-16)"
+_OPENRLHF_PIN = "commit bc71bb19464aca306b33080b2d2bb45d154e2f49 (main, fetched 2026-07-16)"
+
+
+@dataclass(frozen=True)
+class Deviation:
+    """One demonstrated divergence between a framework loss and reference semantics.
+
+    Attributes:
+        framework: Framework name as registered in ``harness.VENDORED``.
+        version: Pinned upstream commit (and fetch date) the demonstration ran against.
+        component: The upstream function/branch that deviates.
+        description: Neutral statement of the analytic difference.
+        demonstrated_by: pytest node id in ``tests/test_conformance.py`` that asserts
+            the exact factor or gap.
+
+    References:
+        docs/derivations/aggregation.md (the reference aggregation semantics);
+        tests/test_conformance.py::test_deviations_registry_node_ids_exist.
+    """
+
+    framework: str
+    version: str
+    component: str
+    description: str
+    demonstrated_by: str
+
+
+DEVIATIONS: tuple[Deviation, ...] = (
+    Deviation(
+        framework="verl",
+        version=_VERL_PIN,
+        component='agg_loss(loss_agg_mode="seq-mean-token-sum-norm")',
+        description=(
+            "With the default loss_scale_factor the loss is Σ_b(Σ_t m·x) / (B · T_padded), "
+            "where T_padded = loss_mask.shape[-1] is the padded width of the current batch. "
+            "Dr.GRPO (arXiv 2503.20783) normalizes by the fixed generation budget: "
+            "Σ_b(Σ_t m·x) / (B · norm_len), polgrad Aggregation.TOKEN_SUM_NORM. The verl "
+            "default therefore equals the Dr.GRPO loss times norm_len/T_padded, a factor "
+            "that varies with batch padding; passing loss_scale_factor=norm_len recovers "
+            "Dr.GRPO exactly."
+        ),
+        demonstrated_by=(
+            "tests/test_conformance.py::"
+            "test_verl_token_sum_norm_deviates_from_dr_grpo_by_norm_len_over_padded_len"
+        ),
+    ),
+    Deviation(
+        framework="verl",
+        version=_VERL_PIN,
+        component='agg_loss(loss_agg_mode="seq-mean-token-mean")',
+        description=(
+            "The per-sequence token mean divides by (L_b + 1e-8) instead of the exact token "
+            "count L_b, so each row's contribution is scaled by L_b/(L_b + 1e-8) relative to "
+            "polgrad Aggregation.SEQ_MEAN_TOKEN_MEAN — an O(1e-8/L_b) relative deflation that "
+            "makes the loss differ from the exact sequence mean of token means whenever it is "
+            "nonzero."
+        ),
+        demonstrated_by=(
+            "tests/test_conformance.py::"
+            "test_verl_seq_mean_token_mean_deviates_by_row_epsilon_factor"
+        ),
+    ),
+    Deviation(
+        framework="openrlhf",
+        version=_OPENRLHF_PIN,
+        component="aggregate_loss(token_level_loss=False)",
+        description=(
+            "The per-sample reduction divides each row's token sum by (L_b + 1e-8) instead of "
+            "L_b before averaging over rows, so the loss equals polgrad "
+            "Aggregation.SEQ_MEAN_TOKEN_MEAN with each row scaled by L_b/(L_b + 1e-8) — the "
+            "same O(1e-8/L_b) relative deflation as verl's seq-mean-token-mean mode."
+        ),
+        demonstrated_by=(
+            "tests/test_conformance.py::test_openrlhf_sample_level_deviates_by_row_epsilon_factor"
+        ),
+    ),
+)
