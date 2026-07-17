@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use polgrad in your research, please cite it as below."
+title: "polgrad: reference semantics, conformance testing, and pathology diagnostics for LLM policy-gradient post-training"
+authors:
+  - family-names: Punjwani
+    given-names: Saif
+repository-code: "https://github.com/SaifPunjwani/polgrad"
+license: Apache-2.0
+version: 0.1.0
+date-released: 2026-07-17
