@@ -56,8 +56,10 @@ explained) so the table is evidence, not assertion.
 ## Install
 
 ```sh
-pip install git+https://github.com/SaifPunjwani/polgrad
+pip install polgrad
 ```
+
+or, for the development version, `pip install git+https://github.com/SaifPunjwani/polgrad`.
 
 Python ≥ 3.10, PyTorch ≥ 2.1, CPU is enough.
 
