@@ -1,4 +1,6 @@
-"""Tests for the conformance harness, fixtures, and deviation registry (contract 4.8).
+"""Tests for the conformance harness, fixtures, and deviation registry: where a
+vendored framework's semantics match polgrad's, the two must agree to fp64 tolerance;
+where they deviate, the deviation registry demonstrates each entry by test.
 
 Fixture replay: ``tools/record_fixtures.py`` recorded every ``VENDORED`` wrapper's loss
 and gradient on seeded inputs into ``tests/fixtures/*.json``; the agreement tests here
@@ -15,13 +17,12 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
 import pytest
 import torch
 from hypothesis import given
-from hypothesis import strategies as st
-from strategies import MASKED_JUNK, padded_masks
+from strategies import LogprobBatch, logprob_batches
 from torch import Tensor
 from torch.testing import assert_close
 
@@ -44,43 +45,6 @@ TRL_COMMIT = "95809b942eb5d11d0b06d749510d88be99230b73"
 # compared against verl must set ratio_cap to match.
 CLIP = ClipConfig(eps_low=0.2, eps_high=0.2)
 CLIP_VERL = ClipConfig(eps_low=0.2, eps_high=0.2, ratio_cap=3.0)
-
-
-class ConformanceBatch(NamedTuple):
-    """A generated (logprobs, old_logprobs, advantages, mask) batch, float64."""
-
-    logprobs: Tensor
-    old_logprobs: Tensor
-    advantages: Tensor
-    response_mask: Tensor
-
-
-@st.composite
-def conformance_batches(draw: st.DrawFn, *, max_b: int = 6, max_t: int = 8) -> ConformanceBatch:
-    """Local stand-in for strategies.logprob_batches with float32-representable bounds.
-
-    The shared strategy passes -0.05 as a width=32 bound, which this Hypothesis version
-    rejects as not exactly representable; the contract bounds (logprobs in [-20, 0],
-    |gaps| <= 4) are preserved here with |gaps| <= 1.5. Masked positions hold
-    MASKED_JUNK in every stream (equal junk in logprobs and old_logprobs keeps the
-    vendored wrappers' unmasked exp() finite).
-    """
-    mask = draw(padded_masks(max_b=max_b, max_t=max_t))
-    b, t = mask.shape
-
-    def fill(low: float, high: float, junk: float) -> Tensor:
-        vals = [
-            draw(st.floats(low, high, allow_nan=False, allow_infinity=False, width=32))
-            for _ in range(b * t)
-        ]
-        x = torch.tensor(vals, dtype=torch.float64).reshape(b, t)
-        return torch.where(mask, x, torch.full_like(x, junk))
-
-    logprobs = fill(-8.0, -0.0625, MASKED_JUNK)
-    junk = torch.full_like(logprobs, MASKED_JUNK)
-    old_logprobs = torch.where(mask, logprobs + fill(-1.5, 1.5, 0.0), junk)
-    advantages = fill(-3.0, 3.0, MASKED_JUNK)
-    return ConformanceBatch(logprobs, old_logprobs, advantages, mask)
 
 
 def _config(
@@ -160,8 +124,8 @@ def test_fixture_files_declare_pinned_provenance() -> None:
 def test_verl_token_mean_pg_clip_agrees_with_polgrad_on_fixtures() -> None:
     """polgrad TOKEN_MEAN PG_CLIP (ratio_cap 3.0) equals verl token-mean on fixtures.
 
-    Agreement case of contract section 4.8: identical inputs, fp64 tolerance, loss and
-    gradient.
+    Agreement case (matching semantics must agree): identical inputs, fp64 tolerance,
+    loss and gradient.
     """
     _assert_agreement(
         "verl_losses.json", "pg_clip_token_mean", _config(Aggregation.TOKEN_MEAN, CLIP_VERL)
@@ -184,7 +148,8 @@ def test_verl_seq_mean_token_sum_agrees_with_polgrad_on_fixtures() -> None:
 def test_openrlhf_token_mean_policy_loss_agrees_with_polgrad_on_fixtures() -> None:
     """polgrad TOKEN_MEAN PG_CLIP equals OpenRLHF PolicyLoss (token level) on fixtures.
 
-    Agreement case of contract section 4.8 (OpenRLHF applies no dual clip by default).
+    Agreement case, matching semantics to fp64 tolerance (OpenRLHF applies no dual
+    clip by default).
     """
     _assert_agreement(
         "openrlhf_losses.json", "pg_clip_token_mean", _config(Aggregation.TOKEN_MEAN, CLIP)
@@ -438,7 +403,7 @@ def test_compare_losses_validation_errors() -> None:
 def test_deviation_report_verl_token_mean_matches_polgrad(gen: torch.Generator) -> None:
     """deviation_report shows fp64-level agreement for verl token-mean PG_CLIP.
 
-    Verifies the contract-4.8 agreement case on 16 seeded cases across three shapes.
+    Verifies the agreement case on 16 seeded cases across three shapes.
     """
     report = deviation_report(
         _config(Aggregation.TOKEN_MEAN, CLIP_VERL),
@@ -558,9 +523,9 @@ def test_trl_reimplementation_provenance_documented() -> None:
     assert "grpo_trainer.py#L2857-L3016" in doc
 
 
-@given(batch=conformance_batches())
+@given(batch=logprob_batches(max_b=6, max_t=8, max_gap=1.5))
 def test_property_trl_bnpo_equals_polgrad_token_mean_on_generated_batches(
-    batch: ConformanceBatch,
+    batch: LogprobBatch,
 ) -> None:
     """polgrad TOKEN_MEAN PG_CLIP equals TRL bnpo on Hypothesis batches (loss + grad)."""
     config = _config(Aggregation.TOKEN_MEAN, CLIP)
@@ -583,9 +548,9 @@ def test_property_trl_bnpo_equals_polgrad_token_mean_on_generated_batches(
     assert_close(polgrad_grad, trl_grad, rtol=RTOL, atol=1e-12)
 
 
-@given(batch=conformance_batches())
+@given(batch=logprob_batches(max_b=6, max_t=8, max_gap=1.5))
 def test_property_verl_token_sum_norm_factor_on_generated_batches(
-    batch: ConformanceBatch,
+    batch: LogprobBatch,
 ) -> None:
     """polgrad TOKEN_SUM_NORM = verl seq-mean-token-sum-norm · T/norm_len on any batch.
 

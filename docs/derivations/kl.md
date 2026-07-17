@@ -81,8 +81,12 @@ $$
 $$
 
 so the two agree to second order as $\delta \to 0$ but differ in general ($\mathbb{E}[k_2]
-= \tfrac12 \mathbb{E}_\pi[(\log r)^2]$ is itself an $f$-divergence, with $f(u) =
-\tfrac12 \log^2 u$, not the KL). Concrete instance: for $\pi = (0.4, 0.3, 0.2, 0.1)$ and
+= \tfrac12 \mathbb{E}_\pi[(\log r)^2]$ is a different divergence — pointwise $\ge 0$ and
+zero iff $\pi = \mathrm{ref}$ — not the KL. Schulman's post calls it an $f$-divergence
+with $f(u) = \tfrac12 \log^2 u$, but that $f$ is convex only on $(0, e]$
+($f''(u) = (1 - \log u)/u^2$), so it is not an $f$-divergence in the standard Csiszár
+sense; no convex representative exists, since representatives differ only by $c(u-1)$,
+which leaves $f''$ unchanged). Concrete instance: for $\pi = (0.4, 0.3, 0.2, 0.1)$ and
 $q = (0.1, 0.2, 0.3, 0.4)$, exact enumeration gives $\mathrm{KL} = 0.4564$ while
 $\mathbb{E}[k_2] = 0.5216$, a bias of $+0.0651$
 (`tests/test_kl.py::test_k2_expected_value_bias_demonstrated_on_tabular_policy`).

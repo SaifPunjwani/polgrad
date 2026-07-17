@@ -237,7 +237,7 @@ def main() -> None:
         "  the L=2 sequence pull 4x harder per token than tokens of the L=8 sequence."
     )
     print(
-        "* token-mean (verl 'token-mean'; TRL default since v0.16.0, TRL issue #2995) weighs\n"
+        "* token-mean (verl 'token-mean'; TRL default since v0.16.0, TRL PR #2881) weighs\n"
         "  every token 1/N, so a sequence's gradient mass grows with its length -- compare the\n"
         "  per-sequence columns of the two rows. The two aggregations only coincide when all\n"
         "  sequences have equal length; this batch is ragged, so loss and gradients differ."

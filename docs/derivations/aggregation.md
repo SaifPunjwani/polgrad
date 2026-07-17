@@ -35,9 +35,13 @@ Here $\ell$ = `norm_len` is Dr.GRPO's fixed generation budget; it must be suppli
 call time exactly when the mode is `TOKEN_SUM_NORM`
 (`tests/test_aggregate.py::test_norm_len_required_for_token_sum_norm_at_call_time`,
 `tests/test_aggregate.py::test_norm_len_ignored_for_other_modes`). Framework provenance:
-`TOKEN_MEAN` is verl's `"token-mean"` and the TRL default since v0.16.0 (TRL issue
-#2995); `SEQ_MEAN_TOKEN_MEAN` is the GRPO paper equation and the TRL GRPOTrainer default
-in v0.14-v0.15; `TOKEN_SUM_NORM` is Dr.GRPO.
+`TOKEN_MEAN` is verl's `"token-mean"`; TRL adopted this global token-level normalization
+in v0.16.0 (PR #2881; see issue #2995 for the ensuing debate — resolved for KL logging
+only in PR #3004), and current TRL exposes it as `loss_type="bnpo"` (local batch), with
+TRL's present default `loss_type="dapo"` being `TOKEN_MEAN` computed over the global
+gradient-accumulated batch (the micro-batch weight algebra below formalizes the
+distinction). `SEQ_MEAN_TOKEN_MEAN` is the GRPO paper equation and the TRL GRPOTrainer
+default in v0.14-v0.15; `TOKEN_SUM_NORM` is Dr.GRPO.
 
 `aggregate` is implemented *as* this inner product, so the identity
 

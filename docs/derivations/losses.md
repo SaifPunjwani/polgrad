@@ -317,7 +317,7 @@ Masked positions are $0$ in `per_token_objective`, $1.0$ in `ratio`, `False` in
 (`tests/test_losses.py::test_policy_loss_sequence_advantages_broadcast`). Input dtype
 is preserved (`tests/test_losses.py::test_policy_loss_preserves_input_dtype`,
 `tests/test_losses.py::test_value_loss_preserves_input_dtype_and_result_is_frozen`).
-Configs are inert frozen data and every contract-4.3 validation rule raises
+Configs are inert frozen data and every config-validation rule above raises
 `ValueError` at call entry
 (`tests/test_losses.py::test_configs_are_inert_frozen_data`,
 `tests/test_losses.py::test_policy_loss_config_validation_errors`,

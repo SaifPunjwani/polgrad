@@ -18,10 +18,14 @@ total tokens $N = \sum_i L_i$, per-token ratio $r_{i,t} =
 Sources checked (equation and section numbers refer to these versions): PPO
 1707.06347v2 (full PDF), DeepSeekMath 2402.03300v3, RLOO 2402.14740v2 (full PDF),
 REINFORCE++ 2501.03262v2, DAPO 2503.14476v2, Dr.GRPO 2503.20783v2, MiniMax-M1
-2506.13585v1, GSPO 2507.18071v2; verl PR #2953 with its merged diff, verl
+2506.13585v1, GSPO 2507.18071v2; verl PR #2953 merged diff (2025-08-26; the
+TIS mechanism it added — `tis_imp_ratio_cap` in `compute_policy_loss_vanilla` — has
+since been refactored at `main` (2026-07-16) into the
+`rollout_is`/`rollout_is_threshold`/`rollout_is_batch_normalize` config family with
+`rollout_is_weights` precomputed outside the loss); verl
 `trainer/config/ppo_trainer.yaml`, `trainer/config/actor/actor.yaml`, and
-`trainer/ppo/core_algos.py` at `main` (2026-07-16); TRL `trainer/grpo_config.py` and
-`trainer/grpo_trainer.py` at `main` (2026-07-16).
+`trainer/ppo/core_algos.py` at `main` (2026-07-16) for the non-TIS constants; TRL
+`trainer/grpo_config.py` and `trainer/grpo_trainer.py` at `main` (2026-07-16).
 
 ## `ppo` — PPO, clipped surrogate (arXiv 1707.06347)
 
@@ -206,9 +210,11 @@ $$
 
 which is eq. (5) exactly. **Clip:** "we set the left and right clipping ranges in
 Equation (5) to 3e-4 and 4e-4, respectively" — `ClipConfig(eps_low=3e-4,
-eps_high=4e-4)`. These are two orders of magnitude tighter than token-level PPO
-clipping because the $1/|y_i|$ exponent concentrates $s_i$ near 1; the same paper runs
-its GRPO baseline at 0.2/0.27. **KL:** none in the objective ("we omit the KL
+eps_high=4e-4)`. These are roughly 600–700× (nearly three orders of magnitude) tighter
+than token-level PPO clipping because the $1/|y_i|$ exponent concentrates $s_i$ near 1;
+the same paper runs its GRPO baseline at 0.2/0.27. (The paper's own "two orders of
+magnitude" phrase refers to the difference in fractions of *clipped tokens* between
+GSPO and GRPO, not to the ratio of clip-range widths.) **KL:** none in the objective ("we omit the KL
 regularization term hereinafter"). **Advantage:** eq. (6), GRPO group normalization
 $(r_i - \mathrm{mean})/\mathrm{std}$ (silent knobs as in the `grpo` entry).
 
@@ -258,9 +264,10 @@ value; instead, we only tuned $\varepsilon^{IS}_{high}$" — hence
 `ClipConfig(eps_low=None, ...)`. But **no numeric $\varepsilon^{IS}_{high}$ appears
 anywhere in 2506.13585v1, appendices included**. The shipped `eps_high=0.2` is
 therefore *not* a paper value: it is the upper bound of verl's
-`compute_policy_loss_cispo`, whose `clip_ratio_high` falls back to the actor default
-`clip_ratio: 0.2` (i.e. clamp at $1 + 0.2$; note verl defaults to a two-sided clamp).
-Replace it to match a tuned setting. A parameterization caution: TRL's
+`compute_policy_loss_cispo`, taken from actor.yaml's `clip_ratio_high: 0.2` (i.e. clamp
+at $1 + 0.2$; `clip_ratio_low` is also 0.2, so verl defaults to a two-sided clamp; the
+code's None-fallback to `clip_ratio: 0.2` is a contingency that never engages under the
+shipped defaults). Replace it to match a tuned setting. A parameterization caution: TRL's
 `loss_type="cispo"` clamps the ratio at the **absolute** value `epsilon_high`
 (`torch.clamp(coef_1, max=self.epsilon_high)`), not at $1+\varepsilon_{high}$ —
 configs are not portable between the two conventions.
@@ -285,7 +292,7 @@ whose gradient this is (for constant baselines) is $-\frac1k\sum_i A_i \log\pi(y
 the paper removes PPO clipping entirely (Sec. 3.2, "Clipping is Rarely Necessary in
 RLHF": clipping fired on "< 5% of the time per batch" and its removal "does not impact
 learning meaningfully"), so `clip=None` and the `ratio` field is the mandated `TOKEN`
-placeholder (unused by REINFORCE, contract 4.3).
+placeholder (unused by REINFORCE; [losses.md](losses.md)).
 
 **Advantage.** Leave-one-out baseline, `rloo_advantages` (no config). The two algebraic
 forms $r_i - \mathrm{mean}_{j\neq i}(r_j) = \frac{G}{G-1}(r_i - \mathrm{mean})$ are
@@ -337,14 +344,36 @@ reference, folded into the per-token reward — `kl_in_reward(kind=K1, coef=0.00
 ($\beta = 0.001$, Sec. 4.2.3) followed by reward-to-go at $\gamma = 1.0$ (Sec. 4.2.3).
 
 **Global advantage normalization.** Eq. (10): $A^{norm} = (A -
-\mathrm{mean}(A))/\mathrm{std}(A)$ over the global batch. polgrad composes this as
-`reinforce_pp_advantages(group_ids=None, batch_norm=True)`: the global-mean baseline
-$r - \mathrm{mean}(r)$ followed by division by the batch std equals eq. (10) because
-the std is shift-invariant
-(`tests/test_advantages.py::test_reinforce_pp_global_baseline_closed_form`,
-`::test_reinforce_pp_batch_norm_closed_form`). The REINFORCE++-baseline variant
-(Appendix A) subtracts the per-group mean and then divides by the batch std — pass
-`group_ids` (`tests/test_advantages.py::test_reinforce_pp_group_baseline_closed_form`).
+\mathrm{mean}(A))/\mathrm{std}(A)$ over the global batch — where $A$ is the
+**token-level** advantage of eq. (8), whose KL-to-go term $\beta\sum_{i=t}^{T}
+\mathrm{KL}(i)$ varies within a sequence, and the mean/std are taken "across the global
+batch for all prompts", i.e. over all $[B, T]$ response tokens (OpenRLHF's
+`experience_maker.py` flatten-normalizes the masked token advantages). The
+paper-faithful composition in polgrad is `kl_in_reward(kind=K1, coef=0.001)`, then
+reward-to-go at $\gamma = 1.0$ (that $[B, T]$ tensor is eq. (8) exactly), then
+`whiten(returns, response_mask, shift_mean=True)`, which is eq. (10)'s masked global
+token-level z-normalization — up to the variance convention (`whiten` uses
+Bessel-corrected variance with `eps` inside the sqrt; OpenRLHF divides by the
+population std with a `1e-8` clamp; the paper specifies neither).
+
+**What `reinforce_pp_advantages` computes instead.** The registry's
+`reinforce_pp_advantages(group_ids=None, batch_norm=True)` is polgrad's *per-sequence
+simplification*: it normalizes $[B]$ scalar rewards (the global-mean baseline
+$r - \mathrm{mean}(r)$ followed by division by the batch std, which composes because
+the std is shift-invariant —
+`tests/test_advantages.py::test_reinforce_pp_global_baseline_closed_form`,
+`::test_reinforce_pp_batch_norm_closed_form`). It cannot accept the $[B, T]$ tensor of
+eq. (8) and it does **not** compute eq. (10) — the eq. (8)–(10) token-level pipeline
+(including the in-reward KL shaping) is *not* what `reinforce_pp_advantages` computes.
+The two coincide only at $T = 1$ and otherwise differ: token-level statistics weight
+sequences by length, and the per-token KL-to-go variation never enters a per-sequence
+reward. The closed-form tests above validate only the $[B]$ function; use the `whiten`
+composition for the paper's eq. (10). The REINFORCE++-baseline variant (Appendix A)
+subtracts the per-group mean and then divides by the batch std — pass `group_ids`
+(`tests/test_advantages.py::test_reinforce_pp_group_baseline_closed_form`); the paper's
+variant also uses the k2 KL estimator ("k2 instead of the k3 divergence approximation
+method in GRPO", Appendix A) — the spec keeps the main-text k1-in-reward and does not
+switch.
 
 **Silent knobs.** The paper does not state the $+\varepsilon$ guard on the std or the
 Bessel convention; `ReinforcePPConfig(eps=1e-8)` is polgrad's division guard with the
@@ -360,7 +389,7 @@ The rollout engine's logprobs differ numerically from the trainer's recomputed
 silently off-policy. verl PR #2953 (merged 2025-08-26, linking the blog "Your Efficient
 RL Framework Secretly Brings You Off-Policy RL Training") corrects the policy loss with
 a truncated importance-sampling weight, token-level, in
-`compute_policy_loss_vanilla`:
+`compute_policy_loss_vanilla` as of the PR as merged:
 
 ```python
 tis_imp_ratio = torch.exp(old_log_prob - rollout_log_probs)
@@ -384,10 +413,14 @@ correction semantics are pinned by
 `tests/test_losses.py::test_is_correction_weight_one_is_noop` and
 `::test_is_correction_cap_binds`.
 
-**The cap.** verl ships `tis_imp_ratio_cap: -1` — TIS disabled — and prescribes no
-tuned value; the PR's usage example enables it with
-`+actor_rollout_ref.actor.behav_imp_weight_cap=10.0`. The registry ships that example
-value, $C = 10.0$; replace it to match your deployment.
+**The cap.** PR #2953 as merged shipped `tis_imp_ratio_cap: -1` — TIS disabled by
+default — and prescribed no tuned value; the PR description's usage example enables it
+with `+actor_rollout_ref.actor.behav_imp_weight_cap=10.0`. The registry ships that
+example value, $C = 10.0$; replace it to match your deployment. verl has since
+refactored TIS into the `rollout_is` config family: at `main` (2026-07-16)
+`compute_policy_loss_vanilla` takes precomputed `rollout_is_weights` and the generated
+trainer config ships `rollout_is: null`, `rollout_is_threshold: 2.0`,
+`rollout_is_batch_normalize: false`.
 
 ## Full-pipeline GRPO vs Dr.GRPO: two independent factors
 

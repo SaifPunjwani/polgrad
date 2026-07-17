@@ -31,3 +31,12 @@ only; kept bodies are byte-identical to upstream).
    at commit bc71bb19464aca306b33080b2d2bb45d154e2f49.
    SHA256 of the vendored file as committed:
    caad2b3b7cd6f0d873b71f765d0ad94e7d5da4e19b9a8e0186ed105b9c6ba9f0
+
+This product also contains a labeled reimplementation (not vendored code) of
+the TRL GRPO loss in src/polgrad/conformance/harness.py whose clipped-surrogate
+arithmetic is reproduced verbatim from trl/trainer/grpo_trainer.py
+(https://github.com/huggingface/trl) at commit
+95809b942eb5d11d0b06d749510d88be99230b73 (upstream file SHA256
+52d9a6c1e298df35d0da4a6fa17874d750ee627f6ac15393c8860d74d1ba4917).
+Copyright 2020-2026 The HuggingFace Team. All rights reserved.
+Licensed under the Apache License, Version 2.0.

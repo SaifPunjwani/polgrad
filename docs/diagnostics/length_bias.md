@@ -42,7 +42,7 @@ From the effective-weight closed forms of `docs/derivations/aggregation.md`
 | `SEQ_MEAN_TOKEN_SUM` | $m_{i,t}/B$ | $L_i/B$ |
 | `TOKEN_SUM_NORM` | $m_{i,t}/(B\,\ell)$ | $L_i/(B\,\ell)$ |
 
-The two contract-named rows are asserted directly against
+The `SEQ_MEAN_TOKEN_MEAN` and `TOKEN_SUM_NORM` rows are asserted directly against
 `polgrad.aggregate.effective_token_weights`: `SEQ_MEAN_TOKEN_MEAN` induces per-token
 weight $\propto 1/L_i$ (exactly $m/(B L_i)$), while `TOKEN_SUM_NORM` induces the
 constant $m/(B\,\ell)$

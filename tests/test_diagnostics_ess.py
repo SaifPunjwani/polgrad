@@ -10,43 +10,11 @@ import pytest
 import torch
 from hypothesis import given
 from hypothesis import strategies as st
-from strategies import MASKED_JUNK, LogprobBatch, padded_masks
+from strategies import logprob_batches
 
 from polgrad.diagnostics.ess import ESSReport, importance_ess, sliding_ess
 
 _LN2 = math.log(2.0)
-
-
-@st.composite
-def logprob_batches(
-    draw: st.DrawFn, *, max_b: int = 8, max_t: int = 12, max_gap: float = 2.0
-) -> LogprobBatch:
-    """Local mirror of strategies.logprob_batches with 64-bit float bounds.
-
-    The shared strategy passes width=32 bounds that this Hypothesis version rejects
-    (-0.05 is not float32-representable); strategies.py may not be edited by module
-    agents, so the batches are generated locally with the same shape and junk rules.
-    """
-    mask = draw(padded_masks(max_b=max_b, max_t=max_t))
-    b, t = mask.shape
-
-    def fill(low: float, high: float) -> torch.Tensor:
-        vals = [
-            draw(st.floats(low, high, allow_nan=False, allow_infinity=False)) for _ in range(b * t)
-        ]
-        out = torch.tensor(vals, dtype=torch.float64).reshape(b, t)
-        return torch.where(mask, out, torch.full_like(out, MASKED_JUNK))
-
-    def near(base: torch.Tensor) -> torch.Tensor:
-        gap = fill(-max_gap, max_gap)
-        return torch.where(mask, base + gap, torch.full_like(base, MASKED_JUNK))
-
-    logprobs = fill(-8.0, -0.05)
-    old_logprobs = near(logprobs)
-    ref_logprobs = near(logprobs)
-    rollout_logprobs = near(old_logprobs)
-    advantages = fill(-3.0, 3.0)
-    return LogprobBatch(logprobs, old_logprobs, ref_logprobs, rollout_logprobs, advantages, mask)
 
 
 def _perturb_masked(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -114,7 +82,7 @@ def test_token_level_golden_case() -> None:
 
 
 def test_sequence_weights_are_unnormalized_sums() -> None:
-    """Contract section 4.6: sequence weights exponentiate the SUMMED gap, not the
+    """Sequence weights exponentiate the SUMMED gap, not the
     length-normalized GSPO exponent — equal per-token gaps on unequal lengths give
     unequal weights (docs/diagnostics/ess.md)."""
     old = torch.zeros(2, 2, dtype=torch.float64)
@@ -199,7 +167,8 @@ def test_sliding_ess_matches_importance_ess_full_window(batch) -> None:  # type:
     step=st.integers(1, 4),
 )
 def test_sliding_ess_window_and_step_shapes(b: int, window: int, step: int) -> None:
-    """Contract section 4.6: output shape is [(B - window)//step + 1]."""
+    """Output shape is [(B - window)//step + 1] (docs/diagnostics/ess.md, sliding
+    windows)."""
     if window > b:
         return
     lp = -torch.rand(b, 1, generator=torch.Generator().manual_seed(b), dtype=torch.float64)
@@ -294,7 +263,8 @@ def test_report_log_weight_stats_match_recomputation(batch, level) -> None:  # t
 
 
 def test_window_validation_errors() -> None:
-    """Contract section 4.6: sliding_ess raises for window > B, window < 2, step < 1."""
+    """sliding_ess raises for window > B, window < 2, step < 1
+    (docs/diagnostics/ess.md, sliding windows)."""
     lp = torch.zeros(4, 1, dtype=torch.float64)
     mask = torch.ones(4, 1, dtype=torch.bool)
     with pytest.raises(ValueError, match=r"window must be <= batch size B=4"):
@@ -335,7 +305,7 @@ def test_masked_positions_may_hold_nonfinite_junk() -> None:
 
 
 def test_summary_is_compact_multiline() -> None:
-    """summary() is a compact human-readable multi-line string (contract section 4.6)."""
+    """summary() is a compact human-readable multi-line string."""
     new, old, mask = _golden_batch()
     report = importance_ess(new, old, mask)
     text = report.summary()

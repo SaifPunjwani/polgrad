@@ -33,8 +33,13 @@ class Aggregation(enum.Enum):
     token count ``N = Σ_{b,t} m_{b,t}``:
 
     Attributes:
-        TOKEN_MEAN: ``Σ_{b,t} m·x / N`` — verl ``"token-mean"``; TRL default since
-            v0.16.0 (TRL issue #2995).
+        TOKEN_MEAN: ``Σ_{b,t} m·x / N`` — verl ``"token-mean"``; TRL adopted this
+            global token-level normalization in v0.16.0 (PR #2881; see issue #2995 for
+            the ensuing debate — resolved for KL logging only in PR #3004). Current TRL
+            exposes it as ``loss_type="bnpo"`` (local batch); TRL's present default is
+            ``loss_type="dapo"``, i.e. TOKEN_MEAN computed over the global
+            gradient-accumulated batch (see the micro-batch weight algebra in
+            docs/derivations/aggregation.md).
         SEQ_MEAN_TOKEN_MEAN: ``mean_b( Σ_t m·x / L_b )`` — the GRPO paper equation; TRL
             GRPOTrainer default in v0.14-v0.15, changed in v0.16.0.
         SEQ_MEAN_TOKEN_SUM: ``mean_b( Σ_t m·x )``.
@@ -75,7 +80,8 @@ def effective_token_weights(
         mode: Aggregation mode.
         norm_len: Fixed generation budget; required iff ``mode`` is
             ``Aggregation.TOKEN_SUM_NORM`` and ignored otherwise, so callers may pass a
-            shared config value (contract section 4.1: the error fires at call time).
+            shared config value (the requirement is enforced at call time, so configs
+            may carry ``None``; see docs/derivations/aggregation.md).
 
     Returns:
         ``[B, T]`` float64 weights, exactly ``0`` at masked positions.

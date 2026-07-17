@@ -25,5 +25,5 @@ settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 
 @pytest.fixture
 def gen() -> torch.Generator:
-    """Seeded generator for the RNG-taking functions (contract section 3)."""
+    """Seeded generator for the RNG-taking functions (docs/conventions.md, determinism)."""
     return torch.Generator().manual_seed(0)

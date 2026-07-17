@@ -24,7 +24,12 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from polgrad._validation import check_2d, check_finite, check_mask, check_same_shape
+from polgrad._validation import (
+    check_2d,
+    check_finite,
+    check_logprob_streams,
+    check_same_shape,
+)
 from polgrad.aggregate import Aggregation, aggregate
 
 __all__ = [
@@ -62,9 +67,11 @@ class KLLossConfig:
         coef: Penalty coefficient multiplying the aggregated KL term.
         aggregation: Aggregation for the KL term; ``None`` inherits
             ``PolicyLossConfig.aggregation``.
-        norm_len: Fixed generation budget; required iff the effective aggregation is
-            ``Aggregation.TOKEN_SUM_NORM``. Constructing with ``norm_len=None`` is
-            always legal; the requirement is enforced when :func:`kl_loss` is called.
+        norm_len: Fixed generation budget for the KL term; ``None`` inherits
+            ``PolicyLossConfig.norm_len``. The effective value is required iff the
+            effective aggregation is ``Aggregation.TOKEN_SUM_NORM``; constructing with
+            ``norm_len=None`` is always legal — the requirement is enforced when
+            :func:`kl_loss` is called.
 
     References:
         docs/derivations/kl.md;
@@ -75,22 +82,6 @@ class KLLossConfig:
     coef: float
     aggregation: Aggregation | None = None
     norm_len: int | None = None
-
-
-def _validate_streams(
-    name_a: str, a: Tensor, name_b: str, b: Tensor, response_mask: Tensor
-) -> None:
-    """Shared shape/mask/finiteness validation for a pair of logprob streams.
-
-    Finiteness is checked only at response positions: masked padding never affects any
-    output, so non-finite junk there must not raise (mask invariance extends to
-    validation).
-    """
-    check_2d(name_a, a)
-    check_same_shape(name_a, a, name_b, b)
-    check_mask(response_mask, like=a)
-    check_finite(name_a, a[response_mask])
-    check_finite(name_b, b[response_mask])
 
 
 def kl_estimate(
@@ -131,7 +122,7 @@ def kl_estimate(
         tests/test_kl.py::test_kl_estimate_golden_values,
         tests/test_kl.py::test_mc_k1_and_k3_match_closed_form_categorical_kl.
     """
-    _validate_streams("logprobs", logprobs, "ref_logprobs", ref_logprobs, response_mask)
+    check_logprob_streams("logprobs", logprobs, "ref_logprobs", ref_logprobs, response_mask)
     zero = torch.zeros((), dtype=logprobs.dtype, device=logprobs.device)
     # Masked positions are zeroed before the nonlinearity so padding junk can reach
     # neither exp()/pow() in the forward pass nor their backward formulas.
@@ -270,7 +261,7 @@ def reverse_kl_grad_surrogate(
         tests/test_kl.py::test_k2_as_loss_gradient_equals_reverse_kl_grad_surrogate,
         tests/test_kl.py::test_k2_as_loss_expected_gradient_equals_analytic_grad_kl.
     """
-    _validate_streams("logprobs", logprobs, "ref_logprobs", ref_logprobs, response_mask)
+    check_logprob_streams("logprobs", logprobs, "ref_logprobs", ref_logprobs, response_mask)
     zero = torch.zeros((), dtype=logprobs.dtype, device=logprobs.device)
     # detach: sg[logprobs - ref_logprobs] is the score-function coefficient; holding it
     # constant makes the pathwise gradient equal the REINFORCE-style sample of ∇KL(π‖ref).

@@ -1,4 +1,4 @@
-"""Tests for polgrad.verify.mc (contract section 4.7).
+"""Tests for polgrad.verify.mc (docs/derivations/goldens.md).
 
 Covers the clt_tolerance arithmetic golden, mc_mean recovering known means within
 clt_tolerance on seeded generators, exact chunk-combination algebra, determinism,

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from torch import Tensor
 
-from polgrad._validation import check_2d, check_finite, check_mask, check_same_shape
+from polgrad._validation import broadcast_advantages, check_2d, check_finite, check_mask
 from polgrad.losses import ClipConfig
 
 __all__ = ["ClipReport", "clip_report"]
@@ -84,7 +84,7 @@ class ClipReport:
 
 
 def _validate_clip(clip: ClipConfig) -> tuple[float, float]:
-    """Enforce the clip_report requirements on ``ClipConfig`` (contract section 4.6)."""
+    """Enforce the clip_report requirements on ``ClipConfig`` (docs/diagnostics/clipping.md)."""
     if clip.eps_low is None or clip.eps_high is None:
         raise ValueError(
             f"clip_report requires a ClipConfig with eps_low and eps_high non-None; "
@@ -98,23 +98,6 @@ def _validate_clip(clip: ClipConfig) -> tuple[float, float]:
             f"ClipConfig.ratio_cap must be a finite float > 1 (dual-clip); got {clip.ratio_cap}"
         )
     return clip.eps_low, clip.eps_high
-
-
-def _broadcast_advantages(advantages: Tensor, like: Tensor, response_mask: Tensor) -> Tensor:
-    """Validate ``[B]`` or ``[B, T]`` advantages and return a ``[B, T]`` view."""
-    if advantages.dim() == 1:
-        if advantages.shape[0] != like.shape[0]:
-            raise ValueError(
-                f"advantages [B] must have B = {like.shape[0]} rows; "
-                f"got shape {tuple(advantages.shape)}"
-            )
-        check_finite("advantages", advantages)
-        return advantages.unsqueeze(1).expand_as(like)
-    if advantages.dim() == 2:
-        check_same_shape("advantages", advantages, "ratio", like)
-        check_finite("advantages (response positions)", advantages[response_mask])
-        return advantages
-    raise ValueError(f"advantages must be [B] or [B, T]; got shape {tuple(advantages.shape)}")
 
 
 def clip_report(
@@ -171,7 +154,7 @@ def clip_report(
             "ratio must be strictly positive at response positions "
             "(an importance ratio is exp(logprobs - old_logprobs) > 0)"
         )
-    adv = _broadcast_advantages(advantages, ratio, response_mask)
+    adv = broadcast_advantages(advantages, ratio, response_mask, like_name="ratio")
 
     # Every region indicator is intersected with the mask, so junk values at masked
     # positions (including non-finite ones) never reach any output (mask invariance).

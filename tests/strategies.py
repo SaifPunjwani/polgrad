@@ -64,8 +64,9 @@ def logprob_batches(
 ) -> LogprobBatch:
     """Batches of (logprobs, old, ref, rollout, advantages, mask).
 
-    ``logprobs`` lie in [-8, -0.05]; the other streams are within ``max_gap`` of them so
-    importance ratios stay in a numerically sane range (contract section 6). Advantages
+    ``logprobs`` lie in [-8, -0.0625]; the other streams are within ``max_gap`` of them so
+    importance ratios stay in a numerically sane range (the bounds keep exp() of any
+    log-ratio gap well away from overflow and underflow). Advantages
     are [B] when ``seq_advantages`` else [B, T]. All tensors are float64; masked
     positions hold ``MASKED_JUNK``.
     """

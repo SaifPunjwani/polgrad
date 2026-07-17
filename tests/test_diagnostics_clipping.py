@@ -38,12 +38,9 @@ class ClipCase(NamedTuple):
 
 @st.composite
 def clip_cases(draw: st.DrawFn, *, max_gap: float = 2.0) -> ClipCase:
-    """Local batch strategy (strategies.py may not be edited by module agents).
-
-    Mirrors strategies.logprob_batches' shape and junk rules with 64-bit float bounds
-    (the shared strategy's width=32 bounds are rejected by this Hypothesis version),
-    and draws a ClipConfig with eps_low, eps_high, and an optional dual-clip cap.
-    """
+    """Like strategies.logprob_batches but a ClipCase: only the old-logprob and
+    advantage streams the clip diagnostics need, bundled with a drawn ClipConfig
+    (eps_low, eps_high, optional dual-clip cap)."""
     mask = draw(padded_masks())
     b, t = mask.shape
 
@@ -148,7 +145,8 @@ def test_quadrant_fractions_constructed_case_without_dual_clip() -> None:
 @given(case=clip_cases())
 def test_quadrant_fractions_match_python_oracle(case: ClipCase) -> None:
     """Quadrant fractions, the killed mask, and gradient_killed_frac match a per-token
-    Python oracle that transcribes the contract-section-4.6 definitions directly."""
+    Python oracle that transcribes the docs/diagnostics/clipping.md definitions
+    directly."""
     ratio = _used_ratio(case)
     report = clip_report(ratio, case.advantages, case.response_mask, case.clip)
     assert case.clip.eps_low is not None and case.clip.eps_high is not None
@@ -279,7 +277,8 @@ def test_zero_advantages_kill_every_response_token() -> None:
 
 def test_sequence_advantages_broadcast_matches_explicit_broadcast() -> None:
     """[B] advantages behave exactly like the same values explicitly expanded to
-    [B, T] (contract section 4.3 broadcast semantics, mirrored by clip_report)."""
+    [B, T] (the docs/derivations/losses.md broadcast semantics, mirrored by
+    clip_report)."""
     ratio = torch.tensor([[1.5, 0.9], [0.5, -123.0]], dtype=torch.float64)
     per_seq = torch.tensor([2.0, -1.0], dtype=torch.float64)
     mask = torch.tensor([[True, True], [True, False]])
@@ -357,8 +356,8 @@ def test_validation_errors() -> None:
 
 
 def test_summary_is_compact_multiline() -> None:
-    """summary() is a compact human-readable multi-line string (contract section 4.6)
-    stating the band and which quadrants kill the gradient."""
+    """summary() is a compact human-readable multi-line string stating the band and
+    which quadrants kill the gradient."""
     ratio, advantages, mask = _constructed_case()
     report = clip_report(ratio, advantages, mask, ClipConfig(0.2, 0.3, ratio_cap=3.0))
     text = report.summary()

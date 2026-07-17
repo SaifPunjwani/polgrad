@@ -1,4 +1,4 @@
-"""Enforces contract section 4.7 for polgrad.verify.gradcheck and polgrad.verify.goldens:
+"""Enforces docs/derivations/goldens.md for polgrad.verify.gradcheck and polgrad.verify.goldens:
 gradcheck_loss passes on representative configs; check_gradient_formula validates the
 correct hand-derived PG gradient and raises on a deliberately wrong derivation;
 SoftmaxBandit's closed forms match autograd on the exact expected objective and direct
@@ -38,7 +38,7 @@ def _gen(seed: int = 7) -> torch.Generator:
     return torch.Generator().manual_seed(seed)
 
 
-# --- gradcheck_loss (contract section 4.7) --------------------------------------------
+# --- gradcheck_loss (docs/derivations/goldens.md) --------------------------------------
 
 REPRESENTATIVE_CONFIGS = [
     pytest.param(
@@ -152,13 +152,12 @@ def test_gradcheck_loss_passes_for_representative_configs(config: PolicyLossConf
     """gradcheck_loss completes without raising on ragged fp64 batches for
     representative SurrogateKind x RatioKind x Aggregation configs, including
     dual-clip, TIS + KL composition, and the stop-gradient surrogates whose frozen
-    equivalents are derived in docs/derivations/losses.md (contract section 4.7)."""
+    equivalents are derived in docs/derivations/losses.md."""
     gradcheck_loss(config, batch_shapes=((2, 3), (3, 5)), generator=_gen())
 
 
 def test_gradcheck_loss_full_mask_when_ragged_false() -> None:
-    """ragged=False draws all-true masks and still passes for a clipped config
-    (contract section 4.7)."""
+    """ragged=False draws all-true masks and still passes for a clipped config."""
     config = PolicyLossConfig(
         ratio=RatioKind.TOKEN,
         surrogate=SurrogateKind.PG_CLIP,
@@ -170,7 +169,7 @@ def test_gradcheck_loss_full_mask_when_ragged_false() -> None:
 
 def test_gradcheck_loss_validation_errors() -> None:
     """Empty or non-positive batch_shapes raise ValueError, and an invalid config
-    propagates policy_loss's contract-4.3 ValueError (contract section 4.7)."""
+    propagates policy_loss's config-validation ValueError."""
     config = PolicyLossConfig(
         ratio=RatioKind.TOKEN,
         surrogate=SurrogateKind.PG,
@@ -191,7 +190,7 @@ def test_gradcheck_loss_validation_errors() -> None:
         gradcheck_loss(bad, batch_shapes=((2, 2),), generator=_gen())
 
 
-# --- check_gradient_formula (contract section 4.7) -------------------------------------
+# --- check_gradient_formula (docs/derivations/goldens.md) ------------------------------
 #
 # Target: PG/TOKEN/TOKEN_MEAN loss L = sum_t w_t * (-r_t * A_t) with w_t = m_t / N.
 # Correct derivation (docs/derivations/losses.md, PG gradient): dL/dlp_t = -w_t A_t r_t.
@@ -231,14 +230,14 @@ def _pg_grad_missing_ratio(lp: torch.Tensor, olp: torch.Tensor, adv: torch.Tenso
 
 def test_check_gradient_formula_accepts_correct_pg_derivation() -> None:
     """The hand-derived PG gradient -w_t A_t r_t matches central finite differences of
-    the PG loss (docs/derivations/losses.md, PG gradient; contract section 4.7)."""
+    the PG loss (docs/derivations/losses.md, PG gradient)."""
     check_gradient_formula(_pg_loss, _pg_grad, (CGF_LP, CGF_OLP, CGF_ADV), atol=1e-8, rtol=1e-6)
 
 
 def test_check_gradient_formula_raises_on_wrong_derivation() -> None:
     """A deliberately wrong derivation — the REINFORCE gradient -w_t A_t, which drops
     the ratio factor r_t — is rejected against finite differences of the PG loss
-    (contract section 4.7: catches wrong derivations, not autograd inconsistency)."""
+    (the check catches wrong derivations, not autograd inconsistency)."""
     with pytest.raises(AssertionError, match="finite differences"):
         check_gradient_formula(
             _pg_loss, _pg_grad_missing_ratio, (CGF_LP, CGF_OLP, CGF_ADV), atol=1e-8, rtol=1e-6
@@ -247,12 +246,9 @@ def test_check_gradient_formula_raises_on_wrong_derivation() -> None:
 
 @st.composite
 def pg_batches(draw: st.DrawFn) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Local (lp, olp, adv, mask) batches with float32-representable bounds.
-
-    The shared strategies.logprob_batches passes -0.05 as a width=32 bound, which this
-    Hypothesis version rejects as not exactly representable; contract bounds (logprobs
-    in [-20, 0], |gaps| <= 4) are preserved here with |gaps| <= 1.5. Masked positions
-    hold MASKED_JUNK."""
+    """Like strategies.logprob_batches but a plain (lp, olp, adv, mask) 4-tuple with
+    tighter |gaps| <= 1.5, matching check_gradient_formula's positional inputs. Masked
+    positions hold MASKED_JUNK."""
     mask = draw(padded_masks(max_b=4, max_t=5))
     b, t = mask.shape
 
@@ -294,7 +290,7 @@ def test_check_gradient_formula_pg_derivation_property(
 
 def test_check_gradient_formula_validation_errors() -> None:
     """Empty inputs, non-floating inputs[0], invalid eps/atol/rtol, non-scalar fn
-    output, and wrong-shape analytic output raise ValueError (contract section 4.7)."""
+    output, and wrong-shape analytic output raise ValueError."""
     x = torch.tensor([1.0, 2.0], dtype=torch.float64)
 
     def cube(v: torch.Tensor) -> torch.Tensor:
@@ -337,7 +333,7 @@ def test_exact_policy_gradient_matches_autograd_on_expected_objective(
 ) -> None:
     """exact_policy_gradient equals torch.autograd on the exact expected objective
     J(theta) = sum_k softmax(theta)_k A_k (docs/derivations/goldens.md, bandit policy
-    gradient; contract section 4.7)."""
+    gradient)."""
     theta, advantages = pair
     leaf = theta.clone().requires_grad_(True)
     objective = (torch.softmax(leaf, dim=0) * advantages).sum()
@@ -365,7 +361,7 @@ def test_exact_policy_gradient_sums_to_zero_and_is_shift_invariant(
 def test_exact_kl_matches_direct_categorical_kl(pair: tuple[torch.Tensor, torch.Tensor]) -> None:
     """exact_kl equals the direct categorical KL sum_k p_k (log p_k - log q_k), is
     non-negative, and is exactly 0 against itself (docs/derivations/goldens.md, bandit
-    KL; contract section 4.7)."""
+    KL)."""
     theta, other = pair
     bandit = SoftmaxBandit(theta, torch.zeros_like(theta))
     log_p = torch.log_softmax(theta, dim=0)
@@ -470,7 +466,7 @@ def test_softmax_bandit_validation_errors() -> None:
         bandit.exact_kl(torch.zeros((2, 2)))
 
 
-# --- golden cases (contract section 4.7) ------------------------------------------------
+# --- golden cases (docs/derivations/goldens.md) ------------------------------------------
 
 
 def _golden_params() -> list[object]:
@@ -481,7 +477,7 @@ def _golden_params() -> list[object]:
 def test_golden_cases_satisfied_by_policy_loss(case: GoldenCase) -> None:
     """policy_loss reproduces each hand-derived expected_loss and
     expected_grad_logprobs to 1e-12 (docs/derivations/goldens.md, section named by the
-    case; contract section 4.7)."""
+    case)."""
     leaf = case.logprobs.clone().requires_grad_(True)
     result = policy_loss(
         case.config,
@@ -496,9 +492,9 @@ def test_golden_cases_satisfied_by_policy_loss(case: GoldenCase) -> None:
 
 
 def test_golden_cases_cover_contract_branches() -> None:
-    """golden_cases() contains every case contract section 4.7 lists — inside clip,
-    clipped high (A > 0), clipped low (A < 0), dual-clip (A < 0, r > c), and a 2-token
-    ragged case — and every derivation anchor names an existing section of
+    """golden_cases() contains every case docs/derivations/goldens.md lists — inside
+    clip, clipped high (A > 0), clipped low (A < 0), dual-clip (A < 0, r > c), and a
+    2-token ragged case — and every derivation anchor names an existing section of
     docs/derivations/goldens.md."""
     cases = golden_cases()
     names = {case.name for case in cases}

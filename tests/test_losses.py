@@ -35,7 +35,7 @@ from polgrad.losses import (
 MODES = tuple(Aggregation)
 NORM_LEN = 4
 
-# Every valid (surrogate, ratio) pair: REINFORCE only with TOKEN (contract section 4.3).
+# Every valid (surrogate, ratio) pair: REINFORCE only with TOKEN (docs/derivations/losses.md).
 VALID_COMBOS = [
     (surrogate, ratio)
     for surrogate in SurrogateKind
@@ -90,13 +90,9 @@ class LossBatch(NamedTuple):
 
 @st.composite
 def loss_batches(draw: st.DrawFn, *, max_b: int = 6, max_t: int = 8) -> LossBatch:
-    """Local stand-in for strategies.logprob_batches with float32-representable bounds.
-
-    The shared strategy passes -0.05 as a width=32 bound, which this Hypothesis version
-    rejects as not exactly representable; contract bounds (logprobs in [-20, 0],
-    |gaps| <= 4) are preserved here with |gaps| <= 1.5 so PG_CLIP ratios exercise both
-    clip branches without overflow. Masked positions hold MASKED_JUNK.
-    """
+    """Like strategies.logprob_batches but with tighter gaps (|old/ref gaps| <= 1.5,
+    |rollout gap| <= 1.0) so PG_CLIP ratios exercise both clip branches without
+    overflow. Masked positions hold MASKED_JUNK."""
     mask = draw(padded_masks(max_b=max_b, max_t=max_t))
     b, t = mask.shape
 
@@ -132,7 +128,7 @@ def _grad_of_loss(
     return result, grad
 
 
-# --- fp64 gradcheck over every valid combination (contract section 4.3) -------------
+# --- fp64 gradcheck over every valid combination (docs/derivations/losses.md) -------
 #
 # Ragged 2x3 batch. Token ratios exp(lp - olp) = [e^0.1, e^-0.2, e^0.2, e^-0.1, e^0.2]
 # = [1.105, 0.819, 1.221, 0.905, 1.221] and sequence ratios [e^{0.1/3}, e^{0.05}]
@@ -241,11 +237,13 @@ def test_fp64_gradcheck_policy_loss_valid_combinations(config: PolicyLossConfig)
 
 @pytest.mark.parametrize("ratio", tuple(RatioKind))
 def test_fp64_gradcheck_policy_loss_dual_clip(ratio: RatioKind) -> None:
-    """gradcheck of the dual-clip branch: token (0,1) has A = -2 < 0 and token ratio
-    e^0.9 = 2.46 > ratio_cap = 2, so the cap floor is the active branch there
+    """gradcheck of the dual-clip branch for every RatioKind: token (0,1) has
+    A = -2 < 0; its token ratio is e^2.4 = 11.02 > ratio_cap = 2 and row 0's sequence
+    ratio is e^{(0.1+2.4+0.2)/3} = e^0.9 = 2.4596 > 2, so the cap floor is the active
+    branch there under TOKEN, SEQUENCE, and SEQUENCE_TOKEN ratios
     (docs/derivations/losses.md, dual-clip)."""
     olp = GC_OLP.clone()
-    olp[0, 1] = -2.5
+    olp[0, 1] = -4.0
     _gradcheck_semantic(make_config(SurrogateKind.PG_CLIP, ratio, ratio_cap=2.0), olp)
 
 
@@ -769,7 +767,7 @@ def test_is_correction_sequence_level_uses_unnormalized_sum() -> None:
 def test_policy_loss_kl_term_composition(batch: LossBatch) -> None:
     """loss = aggregate(per_token_objective) + coef * kl_loss(...), with the result's
     kl_loss field carrying the unscaled KL scalar, and kl_loss None without config.kl
-    (contract section 4.3; docs/derivations/losses.md, composition)."""
+    (docs/derivations/losses.md, KL composition)."""
     mask = batch.response_mask
     config = make_config(
         SurrogateKind.PG_CLIP,
@@ -809,7 +807,7 @@ def test_policy_loss_kl_term_composition(batch: LossBatch) -> None:
 
 def test_policy_loss_kl_inherits_aggregation_and_norm_len() -> None:
     """KLLossConfig.aggregation/norm_len of None inherit the policy config's values;
-    non-None values override them (contract section 4.3)."""
+    non-None values override them (docs/derivations/losses.md, KL composition)."""
     mask = torch.tensor([[True, True], [True, False]])
     lp = torch.tensor([[-0.5, -1.0], [-0.8, MASKED_JUNK]], dtype=torch.float64)
     olp = lp - 0.1
@@ -959,7 +957,7 @@ def test_policy_loss_gradient_is_zero_at_masked_positions(
 @given(batch=loss_batches())
 def test_policy_loss_sequence_advantages_broadcast(batch: LossBatch) -> None:
     """[B] advantages are exactly the [B, T] broadcast of themselves
-    (contract section 4.3)."""
+    (docs/derivations/losses.md)."""
     b, t = batch.response_mask.shape
     seq_adv = batch.advantages[:, 0].clone()
     config = make_config(SurrogateKind.PG_CLIP, RatioKind.TOKEN)
@@ -984,7 +982,7 @@ def test_policy_loss_sequence_advantages_broadcast(batch: LossBatch) -> None:
 @given(batch=loss_batches())
 def test_reinforce_ignores_old_logprobs(batch: LossBatch) -> None:
     """REINFORCE has no ratio: changing old_logprobs leaves every output bitwise
-    unchanged and the reported ratio is all-ones (contract section 4.3)."""
+    unchanged and the reported ratio is all-ones (docs/derivations/losses.md)."""
     config = make_config(SurrogateKind.REINFORCE, RatioKind.TOKEN)
     result_a, grad_a = _grad_of_loss(config, batch)
     result_b, grad_b = _grad_of_loss(config, batch, batch.old_logprobs - 1.25)
@@ -1017,7 +1015,7 @@ def test_policy_loss_preserves_input_dtype() -> None:
 def test_configs_are_inert_frozen_data() -> None:
     """The config and result dataclasses are frozen; constructing a PG_CLIP config
     with clip=None is legal — validation fires at policy_loss entry
-    (contract section 4.3)."""
+    (docs/derivations/losses.md)."""
     config = PolicyLossConfig(
         ratio=RatioKind.TOKEN,
         surrogate=SurrogateKind.PG_CLIP,
@@ -1051,7 +1049,7 @@ def _call(config: PolicyLossConfig, **overrides: torch.Tensor | None) -> PolicyL
 
 
 def test_policy_loss_config_validation_errors() -> None:
-    """Every surrogate/clip compatibility rule of contract section 4.3 raises
+    """Every surrogate/clip compatibility rule (docs/derivations/losses.md) raises
     ValueError at policy_loss entry."""
     base = dict(ratio=RatioKind.TOKEN, aggregation=Aggregation.TOKEN_MEAN)
     pg_clip_bad = [
@@ -1136,7 +1134,7 @@ def test_policy_loss_config_validation_errors() -> None:
 
 def test_policy_loss_call_time_validation_errors() -> None:
     """Missing call-time tensors and shape/mask/finiteness violations raise ValueError
-    naming the argument (contract section 4.3; docs/conventions.md, errors)."""
+    naming the argument (docs/conventions.md, errors)."""
     config = make_config(SurrogateKind.PG_CLIP, RatioKind.TOKEN)
     with pytest.raises(ValueError, match="is_correction is set but rollout_logprobs is None"):
         _call(

@@ -205,7 +205,7 @@ def test_ci_covers_known_slope_in_about_95_percent_of_runs() -> None:
 
 
 def test_mode_induced_weights_and_structural_slopes() -> None:
-    """Contract section 4.6 analytic check via effective_token_weights: with lengths
+    """docs/diagnostics/length_bias.md analytic check via effective_token_weights: with lengths
     [1, 2, 3, 3] (B=4, N=9), SEQ_MEAN_TOKEN_MEAN weights are m/(B·L_i) (per-token
     weight ∝ 1/L_i, so |A| ≡ 1 gives constant y_i = 1/B and slope ≈ 0), while
     TOKEN_SUM_NORM weights are the constant m/(B·norm_len) (so y_i = L_i/(B·norm_len)
@@ -264,7 +264,7 @@ def test_seq_advantages_equal_expanded_token_advantages(
     mask: torch.Tensor, mode: tuple[Aggregation, int | None]
 ) -> None:
     """[B] advantages are broadcast across the row's tokens: the report is identical to
-    passing the explicitly expanded [B, T] tensor (contract section 4.6)."""
+    passing the explicitly expanded [B, T] tensor (docs/diagnostics/length_bias.md)."""
     agg_mode, norm_len = mode
     b, t = mask.shape
     g = torch.Generator().manual_seed(b * 100 + t)
@@ -280,7 +280,7 @@ def test_report_per_seq_fields_match_recomputation(
     case: tuple[torch.Tensor, torch.Tensor], mode: tuple[Aggregation, int | None]
 ) -> None:
     """per_seq_length is Σ_t m (int64) and per_seq_weight_sum is the row sum of
-    effective_token_weights, bitwise (contract section 4.6)."""
+    effective_token_weights, bitwise (docs/diagnostics/length_bias.md)."""
     adv, mask = case
     agg_mode, norm_len = mode
     report = length_bias_probe(adv, mask, agg_mode=agg_mode, norm_len=norm_len)
@@ -310,8 +310,8 @@ def test_doubling_advantages_doubles_the_fit(
 
 
 def test_degenerate_inputs_raise_value_errors() -> None:
-    """Contract section 4.6 / docs/conventions.md: degenerate inputs raise ValueError
-    naming the argument, never NaN."""
+    """docs/diagnostics/length_bias.md (degenerate inputs) / docs/conventions.md:
+    degenerate inputs raise ValueError naming the argument, never NaN."""
     mask = torch.tensor(
         [
             [True, False, False],
@@ -366,7 +366,7 @@ def test_degenerate_inputs_raise_value_errors() -> None:
 
 def test_norm_len_required_at_call_time_for_token_sum_norm() -> None:
     """TOKEN_SUM_NORM without norm_len raises at call time, propagated from
-    effective_token_weights (contract section 4.1)."""
+    effective_token_weights (docs/derivations/aggregation.md)."""
     mask = torch.tensor([[True, False], [True, False], [True, True], [True, True]])
     adv = torch.ones((4, 2), dtype=torch.float64)
     with pytest.raises(ValueError, match=r"norm_len is required"):
@@ -398,7 +398,7 @@ def test_probe_detaches_from_autograd() -> None:
 
 
 def test_summary_is_compact_multiline() -> None:
-    """summary() is a compact human-readable multi-line string (contract section 4.6)."""
+    """summary() is a compact human-readable multi-line string."""
     report = _golden_case()
     text = report.summary()
     assert isinstance(text, str)

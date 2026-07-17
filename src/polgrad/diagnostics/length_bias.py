@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from polgrad._validation import check_finite, check_mask
+from polgrad._validation import broadcast_advantages, check_mask
 from polgrad.aggregate import Aggregation, effective_token_weights
 
 __all__ = ["LengthBiasReport", "length_bias_probe"]
@@ -70,27 +70,6 @@ class LengthBiasReport:
             f" {float(self.per_seq_weight_sum.max()):.4g}];"
             f" lengths in [{int(self.per_seq_length.min())}, {int(self.per_seq_length.max())}]"
         )
-
-
-def _broadcast_advantages(advantages: Tensor, response_mask: Tensor) -> Tensor:
-    """Validate ``advantages`` as ``[B]`` or ``[B, T]`` and return the ``[B, T]`` view."""
-    if advantages.dim() == 1:
-        if advantages.shape[0] != response_mask.shape[0]:
-            raise ValueError(
-                f"advantages has shape {tuple(advantages.shape)} but response_mask has "
-                f"B={response_mask.shape[0]} rows"
-            )
-        check_finite("advantages", advantages)
-        return advantages.unsqueeze(1).expand_as(response_mask)
-    if advantages.dim() == 2:
-        if advantages.shape != response_mask.shape:
-            raise ValueError(
-                f"advantages must be [B] or [B, T] = {tuple(response_mask.shape)}; "
-                f"got shape {tuple(advantages.shape)}"
-            )
-        check_finite("advantages (response positions)", advantages[response_mask])
-        return advantages
-    raise ValueError(f"advantages must be [B] or [B, T]; got shape {tuple(advantages.shape)}")
 
 
 def _check_regressor_nondegenerate(lengths: Tensor) -> None:
@@ -167,7 +146,15 @@ def length_bias_probe(
         ``tests/test_diagnostics_length_bias.py::test_mode_induced_weights_and_structural_slopes``.
     """
     check_mask(response_mask, like=response_mask)
-    adv_tok = _broadcast_advantages(advantages, response_mask)
+    adv_tok = broadcast_advantages(
+        advantages,
+        response_mask,
+        response_mask,
+        like_name="response_mask",
+        batch_mismatch_template="advantages has shape {adv_shape} but response_mask has B={b} rows",
+        shape_mismatch_template="advantages must be [B] or [B, T] = {like_shape}; "
+        "got shape {adv_shape}",
+    )
     n = int(response_mask.shape[0])
     if n < 3:
         raise ValueError(

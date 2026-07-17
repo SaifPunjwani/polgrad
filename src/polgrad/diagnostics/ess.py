@@ -21,7 +21,7 @@ from typing import Literal
 import torch
 from torch import Tensor
 
-from polgrad._validation import check_2d, check_finite, check_mask, check_same_shape
+from polgrad._validation import check_logprob_streams, std_or_zero
 
 __all__ = ["ESSReport", "importance_ess", "sliding_ess"]
 
@@ -66,13 +66,6 @@ class ESSReport:
         )
 
 
-def _std_or_zero(values: Tensor) -> float:
-    """Bessel-corrected std; a single observation has no spread estimate, reported as 0.0."""
-    if values.numel() < 2:
-        return 0.0
-    return float(values.std())
-
-
 def _sequence_log_weights(
     logprobs_new: Tensor, logprobs_old: Tensor, response_mask: Tensor
 ) -> Tensor:
@@ -94,12 +87,15 @@ def _ess_from_log_weights(log_weights: Tensor) -> Tensor:
 
 
 def _validate_streams(logprobs_new: Tensor, logprobs_old: Tensor, response_mask: Tensor) -> None:
-    check_2d("logprobs_new", logprobs_new)
-    check_2d("logprobs_old", logprobs_old)
-    check_same_shape("logprobs_new", logprobs_new, "logprobs_old", logprobs_old)
-    check_mask(response_mask, like=logprobs_new)
-    check_finite("logprobs_new (response positions)", logprobs_new[response_mask])
-    check_finite("logprobs_old (response positions)", logprobs_old[response_mask])
+    check_logprob_streams(
+        "logprobs_new",
+        logprobs_new,
+        "logprobs_old",
+        logprobs_old,
+        response_mask,
+        check_b_2d=True,
+        finite_suffix=" (response positions)",
+    )
 
 
 def importance_ess(
@@ -158,7 +154,7 @@ def importance_ess(
         ess=ess,
         ess_ratio=ess / n,
         log_weight_mean=float(log_weights.mean()),
-        log_weight_std=_std_or_zero(log_weights),
+        log_weight_std=std_or_zero(log_weights),
         log_weight_min=float(log_weights.min()),
         log_weight_max=float(log_weights.max()),
     )

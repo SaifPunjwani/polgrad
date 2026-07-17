@@ -1,4 +1,4 @@
-"""Enforces contract section 4.4 for polgrad.advantages.
+"""Enforces the docs/derivations/advantages.md semantics for polgrad.advantages.
 
 Closed-form cases carry their hand arithmetic in comments; the matching derivations
 are in docs/derivations/advantages.md. Property tests use Hypothesis with the shared

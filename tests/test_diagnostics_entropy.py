@@ -9,8 +9,7 @@ import math
 import pytest
 import torch
 from hypothesis import given
-from hypothesis import strategies as st
-from strategies import MASKED_JUNK, padded_masks
+from strategies import logprob_batches, padded_masks
 
 from polgrad.diagnostics.entropy import (
     EntropyReport,
@@ -18,33 +17,6 @@ from polgrad.diagnostics.entropy import (
     entropy_trend,
     token_entropy_estimate,
 )
-
-
-class _Batch:
-    """Logprobs plus mask for the entropy tests."""
-
-    def __init__(self, logprobs: torch.Tensor, response_mask: torch.Tensor) -> None:
-        self.logprobs = logprobs
-        self.response_mask = response_mask
-
-
-@st.composite
-def logprob_batches(draw: st.DrawFn, *, max_b: int = 8, max_t: int = 12) -> _Batch:
-    """Local logprob batches with 64-bit float bounds.
-
-    The shared strategies.logprob_batches passes width=32 bounds that this Hypothesis
-    version rejects (-0.05 is not float32-representable); strategies.py may not be
-    edited by module agents, so batches are generated locally with the same shape and
-    junk rules.
-    """
-    mask = draw(padded_masks(max_b=max_b, max_t=max_t))
-    b, t = mask.shape
-    vals = [
-        draw(st.floats(-8.0, -0.05, allow_nan=False, allow_infinity=False)) for _ in range(b * t)
-    ]
-    logprobs = torch.tensor(vals, dtype=torch.float64).reshape(b, t)
-    logprobs = torch.where(mask, logprobs, torch.full_like(logprobs, MASKED_JUNK))
-    return _Batch(logprobs, mask)
 
 
 def _perturb_masked(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -127,7 +99,7 @@ def test_entropy_validation_errors() -> None:
 
 
 def test_entropy_summary_is_compact_multiline() -> None:
-    """summary() is a compact human-readable multi-line string (contract section 4.6)."""
+    """summary() is a compact human-readable multi-line string."""
     logprobs = torch.tensor([[-1.0, -2.0], [-4.0, 123.0]], dtype=torch.float64)
     mask = torch.tensor([[True, True], [True, False]])
     report = token_entropy_estimate(logprobs, mask)
@@ -241,7 +213,8 @@ def test_trend_window_uses_trailing_values() -> None:
 
 def test_trend_validation_errors(gen: torch.Generator) -> None:
     """Window bounds, alpha range, n_perm, the alpha-too-small calibration rule, and
-    input shape/finiteness raise ValueError (contract section 4.6)."""
+    input shape/finiteness raise ValueError (docs/diagnostics/entropy.md, masking and
+    validation)."""
     series = torch.zeros(10, dtype=torch.float64)
     with pytest.raises(ValueError, match=r"entropy_per_step must be 1-D"):
         entropy_trend(torch.zeros(2, 5), window=4, generator=gen)
@@ -262,7 +235,7 @@ def test_trend_validation_errors(gen: torch.Generator) -> None:
 
 
 def test_trend_summary_is_compact_multiline(gen: torch.Generator) -> None:
-    """summary() is a compact human-readable multi-line string (contract section 4.6)."""
+    """summary() is a compact human-readable multi-line string."""
     series = torch.randn(20, generator=torch.Generator().manual_seed(2), dtype=torch.float64)
     report = entropy_trend(series, window=20, n_perm=99, alpha=0.05, generator=gen)
     text = report.summary()

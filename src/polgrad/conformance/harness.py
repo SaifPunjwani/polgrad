@@ -129,6 +129,9 @@ def _trl_grpo_loss(
       https://github.com/huggingface/trl/blob/95809b942eb5d11d0b06d749510d88be99230b73/trl/trainer/grpo_trainer.py#L2857-L3016
       (upstream file SHA256
       ``52d9a6c1e298df35d0da4a6fa17874d750ee627f6ac15393c8860d74d1ba4917``).
+    - The reproduced arithmetic is Copyright 2020-2026 The HuggingFace Team. All
+      rights reserved. Licensed under the Apache License, Version 2.0. See also the
+      TRL entry in the repository-level ``NOTICE`` file.
 
     Reimplemented scope, keeping upstream variable names (``coef_1``, ``coef_2``,
     ``per_token_loss``) and upstream arithmetic verbatim:
@@ -298,7 +301,7 @@ def _sample_case(
 ) -> dict[str, Tensor]:
     """Draw one random comparison case in the harness input distribution.
 
-    Bounds follow the shared test strategy bounds (contract section 6): right-padded
+    Bounds follow the shared test strategy bounds (tests/strategies.py): right-padded
     masks with at least one true token per row, ``logprobs`` uniform in
     ``[-8, -0.05]``, log-ratio gaps uniform in ``[-2, 2]`` (so ratios stay within
     ``e^±2`` and verl's ``±20`` log-ratio clamp never binds), per-token advantages

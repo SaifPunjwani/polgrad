@@ -8,9 +8,6 @@ live in ``docs/derivations/advantages.md``. This module imports only
 ``polgrad._validation``.
 """
 
-# Contract section 6 allows Unicode math in docstrings; RUF002 flags some of those
-# characters (gamma, sigma, minus sign) as confusables, so it is exempted here.
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -148,9 +145,11 @@ def grpo_advantages(rewards: Tensor, group_ids: Tensor, config: GroupNormConfig)
     Raises:
         ValueError: On shape/dtype violations, non-finite rewards, negative group ids,
             an unknown ``config.scale``, or — with ``scale="std"`` — any group of size
-            1, whose standard deviation is undefined. Frameworks silently emit 0/ε for
-            such groups; polgrad raises instead (recorded in the conformance deviation
-            docs, not imitated).
+            1, whose standard deviation is undefined. verl at the pinned commit
+            special-cases size-1 groups with mean=0, std=1, silently emitting the raw
+            uncentered reward ``A = r_i/(1+ε)``; polgrad raises instead. This is not
+            registered as a Deviation because the framework advantage estimators could
+            not be vendored — see the scope note in ``polgrad/conformance/deviations.py``.
 
     References:
         GRPO: "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open

@@ -1,5 +1,5 @@
 """Enforces the registry semantics of docs/derivations/variants.md: the AlgorithmSpec
-KL-placement invariant, the presence and callability of all ten contract entries, the
+KL-placement invariant, the presence and callability of all ten registry entries, the
 describe() fact lines, dr_grpo's deferred norm_len, and spot-checks of shipped constants
 against the values stated in the source papers (fetched and quoted on the docs page)."""
 
@@ -26,7 +26,7 @@ from polgrad.losses import (
 )
 from polgrad.registry import ALGORITHMS, AlgorithmSpec, Citation, describe, get
 
-CONTRACT_KEYS = {
+REGISTRY_KEYS = {
     "ppo",
     "grpo",
     "dr_grpo",
@@ -44,12 +44,8 @@ SMOKE_NORM_LEN = 8
 
 @st.composite
 def _registry_batches(draw: st.DrawFn) -> LogprobBatch:
-    """Local batch strategy (contract 6 bounds, dyadic-representable endpoints).
-
-    Defined here instead of using ``strategies.logprob_batches`` because that shared
-    strategy passes ``width=32`` bounds Hypothesis rejects as unrepresentable
-    (``max_value=-0.05``); module test files may only extend strategies locally.
-    """
+    """Like strategies.logprob_batches(max_b=4, max_t=6, seq_advantages=True) but
+    draws full-precision float64 values rather than width=32 floats."""
     mask = draw(padded_masks(max_b=4, max_t=6))
     b, t = mask.shape
 
@@ -117,14 +113,15 @@ def _minimal_loss(*, kl: KLLossConfig | None = None) -> PolicyLossConfig:
 
 
 def test_algorithms_has_exactly_the_ten_contract_keys() -> None:
-    """ALGORITHMS carries the ten keys of contract section 4.5, no more, no fewer."""
-    assert set(ALGORITHMS) == CONTRACT_KEYS
+    """ALGORITHMS carries the ten registry keys of docs/derivations/variants.md, no more,
+    no fewer."""
+    assert set(ALGORITHMS) == REGISTRY_KEYS
 
 
 def test_every_entry_is_a_complete_spec() -> None:
     """Every entry constructs as a frozen AlgorithmSpec whose provenance fields are filled:
     name matches the key, the citation has a title and an arXiv id or URL, and the notes
-    are non-empty (contract 4.5: notes state every silent knob)."""
+    are non-empty (docs/derivations/variants.md: notes state every silent knob)."""
     for key, spec in ALGORITHMS.items():
         assert isinstance(spec, AlgorithmSpec)
         assert spec.name == key
@@ -158,7 +155,7 @@ def test_every_entry_policy_loss_runs_on_a_ragged_batch() -> None:
 
 
 def test_spec_invariant_violations_raise() -> None:
-    """The __post_init__ invariant of contract 4.5 rejects every mismatch between
+    """The AlgorithmSpec __post_init__ invariant rejects every mismatch between
     kl_placement and the kl configs: 'loss' iff loss.kl is set, 'reward' iff kl_reward
     is set."""
     kl = KLLossConfig(kind=KLEstimator.K1, coef=0.1)
@@ -199,11 +196,11 @@ def test_get_returns_registry_entries_and_rejects_unknown_names() -> None:
         assert get(key) is spec
     with pytest.raises(ValueError, match="unknown algorithm name 'gspo2'") as excinfo:
         get("gspo2")
-    for key in CONTRACT_KEYS:
+    for key in REGISTRY_KEYS:
         assert key in str(excinfo.value)
 
 
-@pytest.mark.parametrize("name", sorted(CONTRACT_KEYS))
+@pytest.mark.parametrize("name", sorted(REGISTRY_KEYS))
 def test_describe_states_aggregation_clip_and_kl_facts(name: str) -> None:
     """describe() states the aggregation mode, the clip bounds (or their absence), the
     KL placement with estimator kind and coefficient, the advantage family, and the
@@ -232,7 +229,8 @@ def test_describe_states_aggregation_clip_and_kl_facts(name: str) -> None:
 
 
 def test_dr_grpo_ships_norm_len_none_and_raises_until_replaced() -> None:
-    """dr_grpo ships loss.norm_len=None (contract 4.5); policy_loss raises ValueError at
+    """dr_grpo ships loss.norm_len=None (docs/derivations/variants.md, dr_grpo);
+    policy_loss raises ValueError at
     call time until the caller applies dataclasses.replace(spec.loss, norm_len=budget),
     and describe() states that instruction."""
     spec = ALGORITHMS["dr_grpo"]

@@ -214,7 +214,8 @@ def gradcheck_loss(
     Args:
         config: Loss specification; validated by :func:`polgrad.losses.policy_loss`.
         batch_shapes: Non-empty sequence of ``(B, T)`` with ``B, T >= 1``; keep
-            ``B <= 8``, ``T <= 12`` (contract section 6 gradcheck bounds).
+            ``B <= 8``, ``T <= 12`` (small shapes keep the fp64 finite-difference
+            sweep fast; see tests/strategies.py for the shared bounds).
         generator: Explicit RNG; the same seed reproduces the same batches.
         ragged: Draw ragged right-padded masks when ``True``; all-true masks otherwise.
 
@@ -223,7 +224,7 @@ def gradcheck_loss(
 
     Raises:
         ValueError: On empty or non-positive ``batch_shapes``, or any
-            contract-section-4.3 config violation (propagated from ``policy_loss``).
+            config violation (propagated from ``policy_loss``).
         RuntimeError: From ``torch.autograd.gradcheck`` when autograd and finite
             differences disagree, or if no branch-safe batch is found.
         AssertionError: If the real config's gradient deviates from its

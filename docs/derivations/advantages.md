@@ -85,9 +85,14 @@ them identically. The test asserts the $1/(\sigma_g + \varepsilon)$ factor bitwi
 ### Degenerate groups
 
 A group of size 1 has an undefined standard deviation ($0/0$ under Bessel), so
-`scale="std"` raises `ValueError` (`test_grpo_scale_std_group_of_one_raises`).
-Frameworks silently emit $0/\varepsilon$ instead; that behavior is recorded in the
-conformance deviation docs, not imitated. Centering alone remains well defined — a
+`scale="std"` raises `ValueError` (`test_grpo_scale_std_group_of_one_raises`). verl at
+the pinned commit special-cases singleton groups with mean $= 0$, std $= 1$, silently
+emitting the raw *uncentered* reward $A = r_i/(1+\varepsilon)$ — and the same
+special-case applies on its Dr.GRPO path (`norm_adv_by_std_in_grpo=False` yields
+$r_i - 0$, the raw reward), so it does not match polgrad's `scale="none"` singleton
+advantage of 0 either. polgrad raises instead. This is not registered as a Deviation
+because the framework advantage estimators could not be vendored — see the scope note
+in `polgrad/conformance/deviations.py`. Centering alone remains well defined — a
 singleton's advantage is 0 (`test_grpo_scale_none_allows_group_of_one`).
 
 ## The RLOO identity

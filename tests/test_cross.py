@@ -1,4 +1,4 @@
-"""Cross-module test obligations of contract section 5.
+"""Cross-module test obligations.
 
 Each obligation ties at least two polgrad modules together end to end:
 
@@ -94,13 +94,9 @@ class CrossBatch(NamedTuple):
 
 @st.composite
 def cross_batches(draw: st.DrawFn) -> CrossBatch:
-    """Local stand-in for strategies.logprob_batches with float32-representable bounds.
-
-    The shared strategy passes -0.05 as a width=32 bound, which this Hypothesis version
-    rejects as not exactly representable; contract bounds (logprobs in [-20, 0],
-    |gaps| <= 4) are preserved with |gaps| <= 2 so exp() stays in [e^-2, e^2]. Masked
-    positions hold MASKED_JUNK.
-    """
+    """Like strategies.logprob_batches but a 5-field CrossBatch without a rollout
+    stream, which the cross obligations do not use. Masked positions hold
+    MASKED_JUNK."""
     mask = draw(padded_masks())
     logprobs = _masked_fill(draw, mask, -8.0, -0.0625)
     junk = torch.full_like(logprobs, MASKED_JUNK)
@@ -147,7 +143,7 @@ def equal_length_policy_batches(draw: st.DrawFn) -> EqualLengthBatch:
 
 
 def test_equal_length_grpo_loss_is_dr_grpo_loss_times_norm_len_over_length_exactly() -> None:
-    """Contract section 5, obligation 1: with identical advantages fed to both configs
+    """Cross-module obligation 1: with identical advantages fed to both configs
     (advantage normalization bypassed), the grpo-style SEQ_MEAN_TOKEN_MEAN loss on an
     equal-length batch equals the dr_grpo-style TOKEN_SUM_NORM loss times norm_len/L.
     Here L = 4 and norm_len = 8, so the factor 2 and both weight sets (1/8 and 1/16)
@@ -177,7 +173,7 @@ def test_equal_length_grpo_loss_is_dr_grpo_loss_times_norm_len_over_length_exact
 def test_equal_length_grpo_dr_grpo_collapse_property(
     batch: EqualLengthBatch, norm_len: int
 ) -> None:
-    """Contract section 5, obligation 1: on every generated equal-length batch, with
+    """Cross-module obligation 1: on every generated equal-length batch, with
     identical advantages fed to both registry-derived configs, grpo-style loss ==
     dr_grpo-style loss * (norm_len / L) (docs/derivations/variants.md)."""
     kwargs = {
@@ -192,7 +188,7 @@ def test_equal_length_grpo_dr_grpo_collapse_property(
 
 
 def test_ragged_grpo_dr_grpo_diverge_and_weight_ratio_matches_effective_token_weights() -> None:
-    """Contract section 5, obligation 1: on a ragged batch the two losses differ (no
+    """Cross-module obligation 1: on a ragged batch the two losses differ (no
     single equal-length factor relates them), and the per-sequence weight ratio matches
     the effective_token_weights prediction w_grpo/w_dr = norm_len/L_i (per-token weight
     1/(B*L_i) vs 1/(B*norm_len)); each loss reconstructs bitwise from its weights and
@@ -242,7 +238,7 @@ def test_ragged_grpo_dr_grpo_diverge_and_weight_ratio_matches_effective_token_we
 def test_k2_as_loss_gradient_equals_reverse_kl_grad_surrogate_gradient(
     aggregation: Aggregation, batch: CrossBatch
 ) -> None:
-    """Contract section 5, obligation 2: the autograd gradient of kl_loss with k2 is
+    """Cross-module obligation 2: the autograd gradient of kl_loss with k2 is
     bitwise equal to the autograd gradient of reverse_kl_grad_surrogate under every
     aggregation mode: both are w * (logprobs - ref_logprobs) per token
     (docs/derivations/kl.md)."""
@@ -279,7 +275,7 @@ def test_k2_as_loss_gradient_equals_reverse_kl_grad_surrogate_gradient(
 def test_gradient_killed_mask_equals_policy_loss_autograd_zero_set(
     ratio_cap: float | None, batch: CrossBatch
 ) -> None:
-    """Contract section 5, obligation 3: clip_report.gradient_killed_mask ==
+    """Cross-module obligation 3: clip_report.gradient_killed_mask ==
     (per-token autograd gradient of the PG_CLIP policy_loss == 0) & response_mask on
     generated inputs, with and without dual-clip. Under TOKEN_MEAN every response
     token carries weight 1/N > 0, so the aggregate gradient at a token is 0 iff its
@@ -378,7 +374,7 @@ def _microbatched_reinforce_loss(
 def test_microbatch_weights_match_explicit_microbatched_policy_loss_loop(
     loss_scale: str, mode: Aggregation, batch: PartitionedBatch
 ) -> None:
-    """Contract section 5, obligation 4: microbatch_token_weights equals the autograd
+    """Cross-module obligation 4: microbatch_token_weights equals the autograd
     weights of an explicit micro-batched policy_loss loop. With the REINFORCE
     surrogate d loss/d logprobs = -A_t * w_t per token, so the loop gradient must be
     -(A * microbatch_token_weights): bitwise for loss_scale="sum", and up to one
@@ -425,7 +421,7 @@ def _manual_loo_reinforce_loss(
 
 
 def test_rloo_registry_equals_manual_loo_reinforce_golden() -> None:
-    """Contract section 5, obligation 5, hand-derived case: policy_loss under
+    """Cross-module obligation 5, hand-derived case: policy_loss under
     ALGORITHMS["rloo"].loss (REINFORCE, SEQ_MEAN_TOKEN_SUM) fed rloo_advantages equals
     the manually composed per-group LOO REINFORCE surrogate, bitwise on dyadic inputs.
     Arithmetic: rewards [1, 0, 2, 4], groups [0, 0, 1, 1] -> LOO baselines
@@ -489,7 +485,7 @@ def rloo_batches(draw: st.DrawFn) -> RlooBatch:
 
 @given(batch=rloo_batches())
 def test_rloo_registry_equals_manual_loo_reinforce_property(batch: RlooBatch) -> None:
-    """Contract section 5, obligation 5: on generated batches, rloo_advantages fed to
+    """Cross-module obligation 5: on generated batches, rloo_advantages fed to
     policy_loss under ALGORITHMS["rloo"].loss matches the manually composed per-group
     LOO baseline and REINFORCE surrogate in advantages, loss, and gradient. The
     entry's in-reward k1 shaping acts upstream on the rewards identically for both
@@ -581,7 +577,7 @@ def _bandit_loss(
 
 @pytest.mark.parametrize("name", sorted(ALGORITHMS))
 def test_bandit_end_to_end_reaches_near_greedy_optimal_arm(name: str) -> None:
-    """Contract section 5, obligation 6: an 8-arm SoftmaxBandit trained on-policy from
+    """Cross-module obligation 6: an 8-arm SoftmaxBandit trained on-policy from
     a uniform start with each ALGORITHMS entry (Adam on theta, <= 300 steps, one
     seeded generator per entry) drives the optimal arm's probability above 0.6.
     ppo uses values = zeros with GAEConfig(1, 1), so GAE reduces to the raw
@@ -620,8 +616,8 @@ def test_bandit_end_to_end_reaches_near_greedy_optimal_arm(name: str) -> None:
 
 
 def test_cross_pipeline_mask_invariance_policy_loss_and_clip_report() -> None:
-    """Contract section 3 (masked-position outputs) across modules, supporting
-    obligations 1 and 3 of section 5: perturbing every masked position of every input
+    """The masked-position output rule of docs/conventions.md across modules, supporting
+    cross-module obligations 1 and 3: perturbing every masked position of every input
     stream of the grpo_tis pipeline (PG_CLIP + as-loss k3 KL + token TIS) leaves the
     policy_loss outputs, the logprobs gradient, and the downstream clip_report
     bitwise unchanged."""

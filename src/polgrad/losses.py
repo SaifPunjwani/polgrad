@@ -20,7 +20,13 @@ from typing import Literal
 import torch
 from torch import Tensor
 
-from polgrad._validation import check_2d, check_finite, check_mask, check_same_shape
+from polgrad._validation import (
+    broadcast_advantages,
+    check_2d,
+    check_finite,
+    check_mask,
+    check_same_shape,
+)
 from polgrad.aggregate import Aggregation, aggregate
 from polgrad.kl import KLLossConfig, kl_loss
 
@@ -235,7 +241,7 @@ class ValueLossResult:
 
 
 def _validate_policy_config(config: PolicyLossConfig) -> None:
-    """Enforce the surrogate/clip compatibility rules of contract section 4.3."""
+    """Enforce the surrogate/clip compatibility rules of docs/derivations/losses.md."""
     clip = config.clip
     surrogate = config.surrogate
     if surrogate is SurrogateKind.PG_CLIP:
@@ -281,28 +287,6 @@ def _validate_policy_config(config: PolicyLossConfig) -> None:
             raise ValueError(
                 f"ISCorrectionConfig.level must be 'token' or 'sequence'; got {correction.level!r}"
             )
-
-
-def _broadcast_advantages(advantages: Tensor, like: Tensor, response_mask: Tensor) -> Tensor:
-    """Validate ``[B]`` or ``[B, T]`` advantages and return them ``[B, T]``, 0 at masked."""
-    if advantages.dim() == 1:
-        if advantages.shape[0] != like.shape[0]:
-            raise ValueError(
-                f"advantages [B] must have B = {like.shape[0]} rows; "
-                f"got shape {tuple(advantages.shape)}"
-            )
-        check_finite("advantages", advantages)
-        expanded = advantages.unsqueeze(1).expand_as(like)
-    elif advantages.dim() == 2:
-        check_same_shape("advantages", advantages, "logprobs", like)
-        check_finite("advantages", advantages[response_mask])
-        expanded = advantages
-    else:
-        raise ValueError(f"advantages must be [B] or [B, T]; got shape {tuple(advantages.shape)}")
-    zero = torch.zeros((), dtype=expanded.dtype, device=expanded.device)
-    # Masked positions are zeroed so padded advantage junk reaches neither the surrogate
-    # values nor the backward formulas (mask invariance).
-    return torch.where(response_mask, expanded, zero)
 
 
 def _ratio(
@@ -411,7 +395,7 @@ def policy_loss(
     docs/derivations/losses.md.
 
     Args:
-        config: Loss specification; validated here (contract section 4.3).
+        config: Loss specification; validated here at call entry.
         logprobs: ``[B, T]`` current-policy sampled-token logprobs (differentiable).
         old_logprobs: ``[B, T]`` behavior-policy logprobs (constant); ignored by
             REINFORCE.
@@ -427,7 +411,7 @@ def policy_loss(
         ``per_token_objective``, ``1.0`` in ``ratio``, ``False`` in ``clipped_*``.
 
     Raises:
-        ValueError: On any contract-section-4.3 config violation (PG_CLIP/CISPO clip
+        ValueError: On any config violation (PG_CLIP/CISPO clip
             requirements, PG/REINFORCE ``clip=None``, REINFORCE ``RatioKind.TOKEN``,
             ``ratio_cap > 1``), on missing ``rollout_logprobs``/``ref_logprobs``, on
             shape/mask/dtype violations, or on non-finite response-position values.
@@ -460,7 +444,16 @@ def policy_loss(
     # forward values nor the backward formulas, and the masked ratio is exactly 1.
     lp = torch.where(response_mask, logprobs, zero)
     olp = torch.where(response_mask, old_logprobs, zero)
-    adv = _broadcast_advantages(advantages, logprobs, response_mask)
+    # zero_masked: padded advantage junk must reach neither the surrogate values nor
+    # the backward formulas (mask invariance).
+    adv = broadcast_advantages(
+        advantages,
+        logprobs,
+        response_mask,
+        like_name="logprobs",
+        zero_masked=True,
+        finite_label_2d="advantages",
+    )
 
     all_false = torch.zeros_like(response_mask)
     if config.surrogate is SurrogateKind.REINFORCE:

@@ -5,23 +5,21 @@ that demonstrates the exact analytic discrepancy against the vendored framework 
 (``polgrad.conformance._vendor``) at the pinned commit named in ``version``; entries
 without a demonstrating test are not registered.
 
-Contract note (deviation from contract section 4.8, per its own fix-the-math rule):
-the contract pre-registers verl's ``agg_loss("seq-mean-token-sum-norm")`` as
-``Σ_b(Σ_t m·x) / T_padded`` — "no division by B" — giving a factor ``B·norm_len/T``
-against polgrad ``TOKEN_SUM_NORM = Σ/(B·norm_len)``. At the vendored pinned commit
-``74a718a4`` the code *does* divide by ``global_batch_size`` (which defaults to the
-number of rows with at least one response token, i.e. ``B`` for polgrad-valid masks)
-before dividing by ``loss_scale_factor`` (default: the padded width
-``loss_mask.shape[-1]``). The demonstrated factor at this pin is therefore
+Semantics note: at the vendored pinned commit ``74a718a4``, verl's
+``agg_loss("seq-mean-token-sum-norm")`` divides by ``global_batch_size`` (which
+defaults to the number of rows with at least one response token, i.e. ``B`` for
+polgrad-valid masks) and then by ``loss_scale_factor`` (default: the padded width
+``loss_mask.shape[-1]``), so the loss is ``Σ_b(Σ_t m·x) / (B · T_padded)``. Relative
+to polgrad ``TOKEN_SUM_NORM = Σ/(B·norm_len)`` (Dr.GRPO) the factor is therefore
 ``norm_len/T_padded``, and that is the factor the registered entry and its test
-assert. The substance of the deviation is unchanged: the default divisor is the
-batch-dependent padded length, not Dr.GRPO's fixed generation budget.
+assert: the default divisor is the batch-dependent padded length, not Dr.GRPO's
+fixed generation budget.
 
 Scope note: the group-normalized advantage estimators of verl and TRL could not be
 vendored as pure functions (see the drop lists in the ``_vendor`` file headers), so
-degenerate-group behavior (polgrad raises ``ValueError`` for size-1 groups, contract
-section 4.4) has no demonstrating test here and is not registered as a
-:class:`Deviation`.
+degenerate-group behavior (polgrad raises ``ValueError`` for size-1 groups; see
+docs/derivations/advantages.md, degenerate groups) has no demonstrating test here and
+is not registered as a :class:`Deviation`.
 """
 
 from __future__ import annotations

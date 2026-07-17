@@ -244,7 +244,7 @@ def test_microbatch_weights_match_simulated_loop_autograd(
 ) -> None:
     """microbatch_token_weights (mean combine) equals the autograd gradient of an
     explicit simulated micro-batch loop (docs/derivations/aggregation.md, micro-batch
-    algebra; cross-module obligation 4 of the contract)."""
+    algebra; cross-module obligation 4, tests/test_cross.py)."""
     x, mask, sizes = data
     norm_len = _norm_len(mode)
     weights = microbatch_token_weights(mask, mode, sizes, norm_len=norm_len, loss_scale="mean")
@@ -362,7 +362,7 @@ def test_aggregate_preserves_input_dtype() -> None:
 
 def test_norm_len_required_for_token_sum_norm_at_call_time() -> None:
     """norm_len=None with TOKEN_SUM_NORM raises at call time in all three entry points
-    (contract section 4.1: configs may carry norm_len=None)."""
+    (docs/derivations/aggregation.md: configs may carry norm_len=None)."""
     mask = torch.tensor([[True, True], [True, False]])
     x = torch.zeros((2, 2), dtype=torch.float64)
     with pytest.raises(ValueError, match="norm_len is required"):
@@ -382,7 +382,7 @@ def test_norm_len_must_be_positive() -> None:
 
 def test_norm_len_ignored_for_other_modes() -> None:
     """Passing norm_len with a mode other than TOKEN_SUM_NORM is legal and ignored, so
-    callers may forward a shared config value (contract section 4.1)."""
+    callers may forward a shared config value (docs/derivations/aggregation.md)."""
     mask = torch.tensor([[True, True], [True, False]])
     x = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float64)
     assert torch.equal(

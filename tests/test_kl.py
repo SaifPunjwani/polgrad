@@ -47,12 +47,9 @@ class KLBatch(NamedTuple):
 
 @st.composite
 def kl_batches(draw: st.DrawFn) -> KLBatch:
-    """Local stand-in for strategies.logprob_batches with float32-representable bounds.
-
-    The shared strategy passes -0.05 as a width=32 bound, which this Hypothesis version
-    rejects as not exactly representable; contract bounds (logprobs in [-20, 0],
-    |gaps| <= 4) are preserved here. Masked positions hold MASKED_JUNK.
-    """
+    """Like strategies.logprob_batches but draws a KLBatch: a rewards stream for
+    kl_in_reward instead of advantages, and no rollout logprobs. Masked positions
+    hold MASKED_JUNK."""
     mask = draw(padded_masks())
     b, t = mask.shape
 
@@ -151,7 +148,7 @@ def test_kl_loss_equals_aggregate_of_kl_estimate(
     mode: Aggregation, kind: KLEstimator, batch: KLBatch
 ) -> None:
     """kl_loss is aggregate(kl_estimate(...)) bitwise, every kind x aggregation
-    (contract section 4.2)."""
+    (docs/derivations/kl.md)."""
     mask = batch.response_mask
     norm_len = _norm_len(mode)
     loss = kl_loss(
@@ -167,8 +164,8 @@ def test_k2_as_loss_gradient_equals_reverse_kl_grad_surrogate(
     mode: Aggregation, batch: KLBatch
 ) -> None:
     """grad(kl_loss(K2, agg)) == grad(reverse_kl_grad_surrogate(agg)) exactly, for every
-    aggregation (docs/derivations/kl.md, k2 pathwise gradient; contract cross-module
-    obligation 2)."""
+    aggregation (docs/derivations/kl.md, k2 pathwise gradient; cross-module
+    obligation 2, tests/test_cross.py)."""
     mask = batch.response_mask
     norm_len = _norm_len(mode)
     leaf_a = batch.logprobs.clone().requires_grad_(True)
@@ -325,7 +322,7 @@ def test_k2_expected_value_bias_demonstrated_on_tabular_policy() -> None:
 
 
 def test_mc_k1_and_k3_match_closed_form_categorical_kl(gen: torch.Generator) -> None:
-    """MC certification (contract section 4.2): the sample means of k1 and k3 under
+    """MC certification (docs/derivations/kl.md, expectations): the sample means of k1 and k3 under
     x ~ pi match closed-form categorical KL(pi || q) within an inline CLT tolerance of
     z * sample_std / sqrt(n) with z = 4 (two-sided miss probability ~6e-5), on one
     seeded draw of n = 300000 samples."""
@@ -344,7 +341,7 @@ def test_mc_k1_and_k3_match_closed_form_categorical_kl(gen: torch.Generator) -> 
 
 
 def test_var_k3_below_var_k1_for_near_identical_policies(gen: torch.Generator) -> None:
-    """var(k3) < var(k1) when pi is close to ref (contract section 4.2): k1 fluctuates
+    """var(k3) < var(k1) when pi is close to ref: k1 fluctuates
     at order delta while k3 fluctuates at order delta^2 (docs/derivations/kl.md).
     Verified on one seeded MC draw."""
     logits = torch.tensor([0.3, -0.2, 0.5, 0.0, -0.4], dtype=torch.float64)
@@ -413,7 +410,8 @@ def test_kl_in_reward_golden_values() -> None:
 
 def test_kl_in_reward_is_detached() -> None:
     """kl_in_reward returns a detached tensor even when its inputs carry grad
-    (contract section 4.2: the penalty uses the sampling policy, no gradient)."""
+    (docs/derivations/kl.md, KL in the reward: the penalty uses the sampling policy,
+    no gradient)."""
     rewards = torch.tensor([[1.0, 2.0]], dtype=torch.float64, requires_grad=True)
     old = torch.tensor([[-1.0, -2.0]], dtype=torch.float64, requires_grad=True)
     ref = torch.tensor([[-1.5, -1.0]], dtype=torch.float64)
@@ -469,7 +467,8 @@ def test_kl_functions_preserve_input_dtype() -> None:
 
 def test_kl_loss_config_is_frozen_data() -> None:
     """KLLossConfig is inert frozen data: construction with norm_len=None is always
-    legal (contract sections 4.1/4.2); the TOKEN_SUM_NORM requirement fires when
+    legal (the norm_len requirement is enforced at call time,
+    docs/derivations/aggregation.md); the TOKEN_SUM_NORM requirement fires when
     kl_loss is called."""
     config = KLLossConfig(kind=KLEstimator.K2, coef=0.05)
     assert config.aggregation is None
