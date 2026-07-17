@@ -80,7 +80,8 @@ $$
 
 so GRPO assigns the two groups different advantage magnitudes,
 $1/(\sqrt{2} + \varepsilon) \neq 1/(\sqrt{4/3} + \varepsilon)$, while Dr.GRPO treats
-them identically. The test asserts the $1/(\sigma_g + \varepsilon)$ factor bitwise.
+them identically. The test asserts the $1/(\sigma_g + \varepsilon)$ factor to within an
+ulp (torch's reduction-based std and `math.sqrt` may round differently per platform).
 
 ### Degenerate groups
 

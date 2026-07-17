@@ -262,7 +262,9 @@ def test_dr_grpo_difficulty_bias_exact_std_factor() -> None:
     sigma = torch.tensor(
         [sigma_0, sigma_0, sigma_1, sigma_1, sigma_1, sigma_1], dtype=torch.float64
     )
-    assert torch.equal(a_std, a_none / (sigma + 1e-4))
+    # Not bitwise: torch's reduction-based std can differ from math.sqrt by an ulp
+    # depending on the wheel's kernel dispatch (observed on manylinux cp310).
+    assert torch.allclose(a_std, a_none / (sigma + 1e-4), rtol=1e-14, atol=0.0)
     # The bias: Dr.GRPO treats both groups identically, GRPO does not.
     assert torch.equal(a_none[:2], a_none[2:4])
     assert not torch.equal(a_std[:2], a_std[2:4])
