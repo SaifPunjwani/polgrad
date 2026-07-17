@@ -70,7 +70,8 @@ def logprob_batches(
     positions hold ``MASKED_JUNK``.
     """
     mask = draw(padded_masks(max_b=max_b, max_t=max_t))
-    logprobs = _fill(draw, mask, -8.0, -0.05)
+    # Bounds must be exactly float32-representable for st.floats(width=32); -0.05 is not.
+    logprobs = _fill(draw, mask, -8.0, -0.0625)
 
     def near(base: torch.Tensor) -> torch.Tensor:
         gap = _fill(draw, mask, -max_gap, max_gap, junk=0.0)
