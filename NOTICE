@@ -19,7 +19,7 @@ only; kept bodies are byte-identical to upstream).
    Sources: verl/trainer/ppo/core_algos.py and verl/utils/torch_functional.py
    at commit 74a718a492092312f1004fe25369975137388849.
    SHA256 of the vendored file as committed:
-   a5be6b684c4b27e0fc64d1b1c8a8ae2338504b0db04862f7497e865da72dfcf5
+   54332baf8da9e821bdb3cd5738d7c74018f25d0df51e4d91e193b82db29bbe3a
 
 2. OpenRLHF
    https://github.com/OpenRLHF/OpenRLHF

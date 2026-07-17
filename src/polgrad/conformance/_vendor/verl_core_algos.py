@@ -57,6 +57,17 @@
 #      from `compute_policy_loss`.
 #   4. Added the `# fmt: off` directive so formatters preserve upstream layout.
 #
+# Link rot inherited from upstream (docstrings below cite TRL PPOTrainer line
+# links on `main`; that file has since been removed from TRL main, so the links
+# are dead — they are upstream's bytes and are preserved verbatim under the
+# body hash). Working permalinks to the referenced code at TRL v0.11.4:
+#   compute_policy_loss docstring's ...ppo_trainer.py#L1122 ->
+#     https://github.com/huggingface/trl/blob/714cd42f67cb2c8bef91546dbb2258e326c03c89/trl/trainer/ppo_trainer.py#L1234-L1240
+#   compute_value_loss docstring's ...ppo_trainer.py#L1151 ->
+#     https://github.com/huggingface/trl/blob/714cd42f67cb2c8bef91546dbb2258e326c03c89/trl/trainer/ppo_trainer.py#L1223-L1232
+#   kl_penalty_forward docstring's ...ppo_trainer.py#L1104 ->
+#     https://github.com/huggingface/trl/blob/714cd42f67cb2c8bef91546dbb2258e326c03c89/trl/trainer/ppo_trainer.py#L1150-L1165
+#
 # Self-integrity: SHA256 of every byte of this file below the END-OF-HEADER
 # line, exactly as committed (recomputed and checked by
 # tests/test_vendor.py::test_verl_vendored_body_sha256_matches_header):
