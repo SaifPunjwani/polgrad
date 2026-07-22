@@ -1,6 +1,7 @@
-"""Enforces docs/diagnostics/entropy.md: the sampled-token entropy estimator, the
-Theil-Sen slope, CUSUM changepoint localization, the permutation calibration of the
-false-positive rate, determinism, and validation errors."""
+"""Enforces docs/diagnostics/entropy.md: the sampled-token MC entropy estimator, the
+exact per-token entropy path, the Theil-Sen slope, CUSUM changepoint localization, the
+permutation calibration of the false-positive rate, determinism, and validation
+errors."""
 
 from __future__ import annotations
 
@@ -80,6 +81,118 @@ def test_per_seq_entropy_dtype_preserved(mask: torch.Tensor) -> None:
         report = token_entropy_estimate(logprobs, mask)
         assert report.per_seq_entropy.dtype == dtype
         assert report.per_seq_entropy.shape == (mask.shape[0],)
+
+
+def test_token_entropy_exact_golden_case() -> None:
+    """Hand-derived (docs/diagnostics/entropy.md): a uniform distribution over K arms
+    has H = log K exactly, so exact entropies [log 2, log 4 | log 3] pool to
+    (log 2 + log 4 + log 3)/3 with per-sequence means [(log 2 + log 4)/2, log 3];
+    negative junk at the masked position must not trip validation."""
+    entropies = torch.tensor(
+        [[math.log(2.0), math.log(4.0)], [math.log(3.0), -77.0]], dtype=torch.float64
+    )
+    mask = torch.tensor([[True, True], [True, False]])
+    report = token_entropy_estimate(None, mask, entropies=entropies)
+    assert report.estimator == "exact"
+    assert report.n_tokens == 3
+    expected_pooled = (math.log(2.0) + math.log(4.0) + math.log(3.0)) / 3.0
+    assert report.entropy_estimate == pytest.approx(expected_pooled, rel=1e-12)
+    expected_per_seq = torch.tensor(
+        [(math.log(2.0) + math.log(4.0)) / 2.0, math.log(3.0)], dtype=torch.float64
+    )
+    assert torch.equal(report.per_seq_entropy, expected_per_seq)
+
+
+def test_exact_and_mc_agree_on_policy_within_clt_bound() -> None:
+    """On-policy the MC path and the exact path estimate the same quantity: sampling
+    N tokens from a known categorical p, the pooled -masked-mean(logprobs) has mean
+    H(p) and standard error sqrt(Var[-log p(Y)]/N), so it must agree with the analytic
+    exact-path value within 4 standard errors (docs/diagnostics/entropy.md)."""
+    p = torch.tensor([0.7, 0.2, 0.1], dtype=torch.float64)
+    b, t = 64, 32
+    n_tokens = b * t
+    g = torch.Generator().manual_seed(2024)
+    samples = torch.multinomial(p, n_tokens, replacement=True, generator=g).reshape(b, t)
+    logprobs = torch.log(p)[samples]
+    mask = torch.ones(b, t, dtype=torch.bool)
+    entropy = float(-(p * torch.log(p)).sum())
+    variance = float((p * torch.log(p) ** 2).sum()) - entropy**2
+    mc = token_entropy_estimate(logprobs, mask)
+    exact = token_entropy_estimate(
+        None, mask, entropies=torch.full((b, t), entropy, dtype=torch.float64)
+    )
+    assert mc.estimator == "mc_cross_entropy"
+    assert exact.estimator == "exact"
+    assert exact.entropy_estimate == pytest.approx(entropy, rel=1e-12)
+    assert torch.allclose(exact.per_seq_entropy, torch.full((b,), entropy, dtype=torch.float64))
+    clt_bound = 4.0 * math.sqrt(variance / n_tokens)
+    assert abs(mc.entropy_estimate - exact.entropy_estimate) <= clt_bound
+
+
+@given(mask=padded_masks())
+def test_mask_invariance_exact_path(mask: torch.Tensor) -> None:
+    """Masked entropies never affect the exact-path report and never trip validation,
+    even when the junk is negative (docs/conventions.md): bitwise equality after
+    perturbing masked positions."""
+    values = 3.0 * torch.rand(
+        mask.shape, generator=torch.Generator().manual_seed(17), dtype=torch.float64
+    )
+    entropies = torch.where(mask, values, torch.full_like(values, 123.0))
+    base = token_entropy_estimate(None, mask, entropies=entropies)
+    perturbed = token_entropy_estimate(None, mask, entropies=_perturb_masked(entropies, mask))
+    assert base.estimator == perturbed.estimator == "exact"
+    assert base.n_tokens == perturbed.n_tokens
+    assert base.entropy_estimate == perturbed.entropy_estimate
+    assert torch.equal(base.per_seq_entropy, perturbed.per_seq_entropy)
+
+
+def test_estimator_field_on_both_paths() -> None:
+    """estimator is "mc_cross_entropy" without entropies and "exact" with them, both
+    surfaced in summary(); when both inputs are given, entropies win and logprobs is
+    ignored (docs/diagnostics/entropy.md)."""
+    logprobs = torch.tensor([[-1.0, -2.0], [-4.0, 123.0]], dtype=torch.float64)
+    entropies = torch.tensor([[0.5, 1.5], [2.5, -9.0]], dtype=torch.float64)
+    mask = torch.tensor([[True, True], [True, False]])
+    mc = token_entropy_estimate(logprobs, mask)
+    assert mc.estimator == "mc_cross_entropy"
+    assert "estimator=mc_cross_entropy" in mc.summary()
+    exact = token_entropy_estimate(None, mask, entropies=entropies)
+    assert exact.estimator == "exact"
+    assert "estimator=exact" in exact.summary()
+    both = token_entropy_estimate(logprobs, mask, entropies=entropies)
+    assert both.estimator == "exact"
+    assert both.entropy_estimate == exact.entropy_estimate
+    assert torch.equal(both.per_seq_entropy, exact.per_seq_entropy)
+
+
+def test_exact_entropy_validation_errors() -> None:
+    """Both inputs None, logprobs None without entropies, non-2-D or badly masked
+    entropies, and negative or non-finite entropies at response positions raise
+    ValueError naming the argument (docs/conventions.md); negative junk at masked
+    positions must not raise."""
+    mask = torch.ones(2, 3, dtype=torch.bool)
+    entropies = torch.full((2, 3), 0.5, dtype=torch.float64)
+    with pytest.raises(ValueError, match=r"logprobs must be provided when entropies is None"):
+        token_entropy_estimate(None, mask)
+    with pytest.raises(ValueError, match=r"logprobs must be provided when entropies is None"):
+        token_entropy_estimate(None, mask, entropies=None)
+    with pytest.raises(ValueError, match=r"entropies must be 2-D"):
+        token_entropy_estimate(None, mask, entropies=torch.zeros(3))
+    with pytest.raises(ValueError, match=r"dtype torch\.bool"):
+        token_entropy_estimate(None, torch.ones(2, 3), entropies=entropies)
+    negative = entropies.clone()
+    negative[0, 1] = -1e-6
+    with pytest.raises(ValueError, match=r"entropies must be >= 0 at response positions"):
+        token_entropy_estimate(None, mask, entropies=negative)
+    nonfinite = entropies.clone()
+    nonfinite[1, 2] = float("inf")
+    with pytest.raises(ValueError, match=r"entropies \(response positions\) contains non-finite"):
+        token_entropy_estimate(None, mask, entropies=nonfinite)
+    partial_mask = torch.tensor([[True, True, False], [True, True, True]])
+    masked_junk = entropies.clone()
+    masked_junk[0, 2] = -55.25
+    report = token_entropy_estimate(None, partial_mask, entropies=masked_junk)
+    assert report.n_tokens == 5
 
 
 def test_entropy_validation_errors() -> None:

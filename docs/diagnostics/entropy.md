@@ -2,7 +2,8 @@
 
 Entropy collapse — the policy distribution sharpening until exploration dies — is a
 standard RL post-training pathology. `token_entropy_estimate` produces a per-batch
-entropy estimate from the sampled-token logprobs alone; `entropy_trend` watches the
+entropy estimate from the sampled-token logprobs alone, or from exact per-token
+distribution entropies when the caller has full logits; `entropy_trend` watches the
 resulting per-step series for drift (Theil–Sen slope) and sudden collapse (CUSUM
 changepoint with a permutation-calibrated threshold).
 
@@ -34,6 +35,69 @@ Golden case (`tests/test_diagnostics_entropy.py::test_token_entropy_golden_case`
 logprobs $[[-1, -2], [-4, \text{junk}]]$ with mask $[[T, T], [T, F]]$ give
 $\texttt{entropy\_estimate} = (1 + 2 + 4)/3 = 7/3$ and
 $\texttt{per\_seq\_entropy} = [3/2, 4]$.
+
+## Exact per-token entropies
+
+### Why $-\text{masked-mean}(\text{logprobs})$ is a Monte Carlo estimator, and when it breaks
+
+The estimator above sees one sample per position: the token that happened to be drawn.
+Write $\mu$ for the sampling (behavior) policy and $\pi$ for the policy being scored.
+The expectation of a sampled token's $-\log \pi(y_t)$ is
+
+$$
+\mathbb E_{y \sim \mu}\big[-\log \pi(y)\big]
+= H(\mu) + \mathrm{KL}(\mu \,\|\, \pi),
+$$
+
+the cross-entropy of $\pi$ under $\mu$. On-policy ($\mu = \pi$) the KL term vanishes and
+the estimator is unbiased for $H(\pi)$, with per-token sampling variance
+$\operatorname{Var}_{y\sim\pi}[-\log \pi(y)]$. Off-policy — stale rollouts, an inference
+engine that disagrees numerically with the trainer, or scoring a reference policy — it is
+biased upward from $H(\mu)$ by $\mathrm{KL}(\mu\|\pi) \ge 0$ and estimates neither
+$H(\mu)$ nor $H(\pi)$.
+
+### The exact alternative
+
+When the caller has the full logits $z \in \mathbb R^V$ of the next-token distribution at
+each response position, the conditional entropy needs no sampling at all:
+
+$$
+H\big(\pi(\cdot \mid y_{<t}, x)\big)
+= -\sum_v \pi_v \log \pi_v
+= \operatorname{logsumexp}(z) - \sum_v \operatorname{softmax}(z)_v \, z_v ,
+$$
+
+one line in PyTorch: `torch.distributions.Categorical(logits=logits).entropy()`. These
+are the true entropies of the scored distributions, so they are valid regardless of
+which policy generated the tokens and carry zero Monte Carlo variance.
+
+`token_entropy_estimate(logprobs, response_mask, entropies=...)` accepts such a
+$[B, T]$ tensor and computes the same masked-mean report from it; `logprobs` may then be
+`None` (and is ignored if given — the exact path wins). Passing neither raises
+`ValueError`. The report's `estimator` field records which path produced it —
+`"mc_cross_entropy"` or `"exact"` — and `summary()` surfaces it
+(`tests/test_diagnostics_entropy.py::test_estimator_field_on_both_paths`).
+
+Golden case (`tests/test_diagnostics_entropy.py::test_token_entropy_exact_golden_case`):
+a uniform distribution over $K$ arms has $H = \log K$ exactly, so entropies
+$[[\log 2, \log 4], [\log 3, \text{junk}]]$ with mask $[[T, T], [T, F]]$ give
+$\texttt{entropy\_estimate} = (\log 2 + \log 4 + \log 3)/3 = \log 24 / 3$ and
+$\texttt{per\_seq\_entropy} = [(\log 2 + \log 4)/2, \log 3]$.
+
+On-policy consistency
+(`tests/test_diagnostics_entropy.py::test_exact_and_mc_agree_on_policy_within_clt_bound`):
+sampling $N$ tokens from a known categorical $p$ and feeding the sampled-token logprobs
+to the MC path, the pooled estimate has mean $H(p)$ and standard error
+$\sqrt{\operatorname{Var}[-\log p(Y)]/N}$ by the CLT, so it must agree with the exact
+path (fed the analytic $H(p)$ at every position) within four standard errors.
+
+Validation mirrors any per-token stream: `entropies` must be 2-D with a valid mask and
+finite at response positions, and additionally $\ge 0$ there — a distribution entropy
+is never negative, so a negative response-position value raises `ValueError`
+(`tests/test_diagnostics_entropy.py::test_exact_entropy_validation_errors`). Masked
+positions never affect the report or the validation, even with negative junk: bitwise
+equality under masked perturbation
+(`tests/test_diagnostics_entropy.py::test_mask_invariance_exact_path`).
 
 ## Trend analysis
 

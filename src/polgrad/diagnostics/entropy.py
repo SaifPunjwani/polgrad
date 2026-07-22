@@ -1,7 +1,9 @@
-"""Policy-entropy diagnostics: sampled-token entropy estimate and collapse detection.
+"""Policy-entropy diagnostics: per-batch entropy estimate and collapse detection.
 
 ``token_entropy_estimate`` turns the sampled-token log-probabilities into the Monte
-Carlo cross-entropy estimate of the policy entropy (unbiased on-policy only).
+Carlo cross-entropy estimate of the policy entropy (unbiased on-policy only), or — when
+the caller supplies exact per-token distribution entropies computed from full logits —
+reports those exactly, valid regardless of which policy sampled the tokens.
 ``entropy_trend`` watches a per-step entropy series for the collapse pathology: a
 Theil-Sen slope for drift plus a CUSUM changepoint test whose rejection threshold is
 calibrated by permutation, so the false-positive rate is at most ``alpha`` under the
@@ -26,21 +28,29 @@ __all__ = ["EntropyReport", "TrendReport", "entropy_trend", "token_entropy_estim
 
 @dataclass(frozen=True)
 class EntropyReport:
-    """Sampled-token entropy estimate for one batch.
+    """Per-batch policy-entropy estimate.
 
     Attributes:
         n_tokens: Total number of response tokens pooled.
-        entropy_estimate: ``-masked-mean(logprobs)`` over all response tokens.
-        per_seq_entropy: ``[B]`` per-sequence ``-masked-mean`` of the row's logprobs.
+        entropy_estimate: Masked mean over all response tokens of the per-token entropy
+            stream: ``-logprobs`` for the MC estimator, the caller-supplied exact
+            entropies otherwise.
+        per_seq_entropy: ``[B]`` per-sequence masked mean of the same stream.
+        estimator: Which estimator produced the report: ``"mc_cross_entropy"``
+            (``-masked-mean(logprobs)``, unbiased on-policy only) or ``"exact"``
+            (caller-supplied per-token distribution entropies, valid regardless of the
+            sampling policy).
 
     References:
         docs/diagnostics/entropy.md; enforced by
-        ``tests/test_diagnostics_entropy.py::test_token_entropy_golden_case``.
+        ``tests/test_diagnostics_entropy.py::test_token_entropy_golden_case`` and
+        ``tests/test_diagnostics_entropy.py::test_token_entropy_exact_golden_case``.
     """
 
     n_tokens: int
     entropy_estimate: float
     per_seq_entropy: Tensor
+    estimator: str
 
     def summary(self) -> str:
         """Return a compact human-readable multi-line description of the report."""
@@ -48,7 +58,7 @@ class EntropyReport:
         per_seq_max = float(self.per_seq_entropy.max())
         return (
             f"token entropy estimate: {self.entropy_estimate:.4g} nats"
-            f" over n_tokens={self.n_tokens}\n"
+            f" over n_tokens={self.n_tokens} (estimator={self.estimator})\n"
             f"per-sequence entropy: min={per_seq_min:.4g} max={per_seq_max:.4g}"
             f" (B={self.per_seq_entropy.numel()})"
         )
@@ -97,46 +107,97 @@ class TrendReport:
         )
 
 
-def token_entropy_estimate(logprobs: Tensor, response_mask: Tensor) -> EntropyReport:
-    """Monte Carlo cross-entropy estimate of the policy entropy from sampled tokens.
+def token_entropy_estimate(
+    logprobs: Tensor | None,
+    response_mask: Tensor,
+    *,
+    entropies: Tensor | None = None,
+) -> EntropyReport:
+    """Per-batch policy-entropy report from sampled-token logprobs or exact entropies.
 
-    ``entropy_estimate = -(Σ_{b,t} m·logprobs) / Σ_{b,t} m`` and
-    ``per_seq_entropy_b = -(Σ_t m·logprobs) / Σ_t m``. Because
-    ``H(π) = E_{y~π}[-log π(y)]``, the sampled-token ``-logprobs`` is an unbiased
-    entropy estimate **only when the tokens were sampled from the same policy that is
-    scored** (on-policy); off-policy it estimates the cross-entropy
-    ``H(sampling policy, π)`` instead.
+    Two estimators share the same masked-mean report; ``EntropyReport.estimator`` says
+    which one ran:
+
+    - **MC cross-entropy** (``entropies=None``, ``estimator="mc_cross_entropy"``):
+      ``entropy_estimate = -(Σ_{b,t} m·logprobs) / Σ_{b,t} m`` and
+      ``per_seq_entropy_b = -(Σ_t m·logprobs) / Σ_t m``. Because
+      ``H(π) = E_{y~π}[-log π(y)]``, the sampled-token ``-logprobs`` is an unbiased
+      one-sample Monte Carlo estimate of the conditional entropy **only when the tokens
+      were sampled from the same policy that is scored** (on-policy). Off-policy — the
+      tokens came from a sampling policy μ ≠ π — its expectation is the cross-entropy
+      ``E_{y~μ}[-log π(y)] = H(μ) + KL(μ ‖ π)``, biased upward from ``H(μ)`` by the KL
+      term and an estimate of neither ``H(μ)`` nor ``H(π)``.
+    - **Exact** (``entropies`` given, ``estimator="exact"``): the caller supplies the
+      per-token conditional entropies ``H(π(·|y_<t, x))``. Given the full logits ``z``
+      of the next-token distribution at each response position,
+
+      ``H = -Σ_v π_v·log π_v = logsumexp(z) - Σ_v softmax(z)_v·z_v``,
+
+      one line in PyTorch:
+      ``entropies = torch.distributions.Categorical(logits=logits).entropy()``.
+      These are the true entropies of the scored distributions — no sampling enters —
+      so the report is valid regardless of which policy generated the tokens and
+      carries zero Monte Carlo variance. When ``entropies`` is given the report is
+      computed from it and ``logprobs`` is ignored (it may be ``None``).
 
     Args:
-        logprobs: ``[B, T]`` sampled-token log-probabilities ``log π(y_t | y_<t, x)``.
+        logprobs: ``[B, T]`` sampled-token log-probabilities ``log π(y_t | y_<t, x)``,
+            or ``None``. ``None`` is allowed only when ``entropies`` is provided.
         response_mask: ``[B, T]`` bool mask of response tokens.
+        entropies: Optional ``[B, T]`` exact per-token distribution entropies
+            ``H(π(·|y_<t, x))``; must be finite and ``>= 0`` at response positions
+            (a distribution entropy is never negative).
 
     Returns:
         An :class:`EntropyReport`; ``per_seq_entropy`` has the input dtype and is
         detached.
 
     Raises:
-        ValueError: If ``logprobs`` is not 2-D, the mask is invalid (dtype, shape, or a
-            row with zero response tokens), or a response position holds a non-finite
-            value.
+        ValueError: If ``logprobs`` and ``entropies`` are both ``None``; if the
+            per-token input is not 2-D, the mask is invalid (dtype, shape, or a row
+            with zero response tokens), or a response position holds a non-finite
+            value; or if ``entropies`` is negative at a response position.
 
     References:
         docs/diagnostics/entropy.md; enforced by
-        ``tests/test_diagnostics_entropy.py::test_token_entropy_golden_case`` and
-        ``tests/test_diagnostics_entropy.py::test_pooled_entropy_is_length_weighted_mean_of_per_seq``.
+        ``tests/test_diagnostics_entropy.py::test_token_entropy_golden_case``,
+        ``tests/test_diagnostics_entropy.py::test_token_entropy_exact_golden_case``, and
+        ``tests/test_diagnostics_entropy.py::test_exact_and_mc_agree_on_policy_within_clt_bound``.
     """
-    check_2d("logprobs", logprobs)
-    check_mask(response_mask, like=logprobs)
-    pooled = logprobs[response_mask]
-    check_finite("logprobs (response positions)", pooled)
-    lengths = response_mask.sum(dim=1).to(logprobs.dtype)
-    row_sums = logprobs.masked_fill(~response_mask, 0.0).sum(dim=1)
+    if entropies is not None:
+        check_2d("entropies", entropies)
+        check_mask(response_mask, like=entropies)
+        pooled = entropies[response_mask]
+        check_finite("entropies (response positions)", pooled)
+        if bool((pooled < 0).any()):
+            raise ValueError(
+                "entropies must be >= 0 at response positions (a distribution entropy"
+                f" is never negative); got min {float(pooled.min())}"
+            )
+        per_token = entropies
+        estimator = "exact"
+    else:
+        if logprobs is None:
+            raise ValueError(
+                "logprobs must be provided when entropies is None: pass sampled-token"
+                " logprobs for the MC estimate, or exact per-token entropies via"
+                " entropies="
+            )
+        check_2d("logprobs", logprobs)
+        check_mask(response_mask, like=logprobs)
+        check_finite("logprobs (response positions)", logprobs[response_mask])
+        per_token = -logprobs
+        pooled = per_token[response_mask]
+        estimator = "mc_cross_entropy"
+    lengths = response_mask.sum(dim=1).to(per_token.dtype)
+    row_sums = per_token.masked_fill(~response_mask, 0.0).sum(dim=1)
     # Diagnostic output only; the entropy trace must never feed a gradient path.
-    per_seq_entropy = (-row_sums / lengths).detach()
+    per_seq_entropy = (row_sums / lengths).detach()
     return EntropyReport(
         n_tokens=int(pooled.numel()),
-        entropy_estimate=float(-pooled.mean()),
+        entropy_estimate=float(pooled.mean()),
         per_seq_entropy=per_seq_entropy,
+        estimator=estimator,
     )
 
 
