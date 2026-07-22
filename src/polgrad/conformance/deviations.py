@@ -2,7 +2,8 @@
 
 Every :class:`Deviation` entry is backed by a test in ``tests/test_conformance.py``
 that demonstrates the exact analytic discrepancy against the vendored framework code
-(``polgrad.conformance._vendor``) at the pinned commit named in ``version``; entries
+(``polgrad.conformance._vendor``) or the labeled reimplementations in
+``polgrad.conformance.harness``, at the pinned commit named in ``version``; entries
 without a demonstrating test are not registered.
 
 Semantics note: at the vendored pinned commit ``74a718a4``, verl's
@@ -103,6 +104,29 @@ DEVIATIONS: tuple[Deviation, ...] = (
         ),
         demonstrated_by=(
             "tests/test_conformance.py::test_openrlhf_sample_level_deviates_by_row_epsilon_factor"
+        ),
+    ),
+    Deviation(
+        framework="verl",
+        version=_VERL_PIN,
+        component="compute_policy_loss_gspo",
+        description=(
+            "The importance ratio is the GSPO-token form of the GSPO paper's eq. 14 "
+            "(arXiv 2507.18071), log s_{i,t} = sg[mean masked log-ratio] + log_prob - "
+            "sg[log_prob]: the sequence weight is detached, so the gradient is token-local "
+            "(sg[s_i] * grad logprob_t, polgrad RatioKind.SEQUENCE_TOKEN) rather than "
+            "flowing through the length-normalized mean as in the paper's eq. 7 sequence "
+            "ratio (polgrad RatioKind.SEQUENCE). The loss value equals the eq.-7 form for "
+            "any advantages, and the gradients coincide when advantages are constant within "
+            "each row (the per-sequence group-normalized advantages of eq. 6); for "
+            "per-token advantages the gradients differ, and no verl config restores the "
+            "eq.-7 gradient. The function also clamps the combined log ratio at max=10.0 "
+            "and always aggregates with agg_loss('seq-mean-token-mean') (ignoring its "
+            "loss_agg_mode parameter), thereby inheriting the (L_b + 1e-8) row deflation "
+            "registered above for that mode."
+        ),
+        demonstrated_by=(
+            "tests/test_conformance.py::test_verl_gspo_gradient_is_token_local_gspo_token_form"
         ),
     ),
 )

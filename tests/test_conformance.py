@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ from polgrad.conformance import harness
 from polgrad.conformance.deviations import DEVIATIONS
 from polgrad.conformance.harness import VENDORED, compare_losses, deviation_report
 from polgrad.losses import ClipConfig, PolicyLossConfig, RatioKind, SurrogateKind, policy_loss
+from polgrad.registry import ALGORITHMS
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 RTOL = 1e-12
@@ -45,6 +47,12 @@ TRL_COMMIT = "95809b942eb5d11d0b06d749510d88be99230b73"
 # compared against verl must set ratio_cap to match.
 CLIP = ClipConfig(eps_low=0.2, eps_high=0.2)
 CLIP_VERL = ClipConfig(eps_low=0.2, eps_high=0.2, ratio_cap=3.0)
+
+# verl's GSPO/CISPO clip both sides with the pinned ActorConfig defaults
+# clip_ratio_low = clip_ratio_high = 0.2 (no dual clip in either function); the paper
+# values the registry ships differ (GSPO: 3e-4/4e-4; CISPO: one-sided, eps_low=None),
+# so the agreement tests dataclasses.replace the registry configs with this clip.
+CLIP_VERL_GSPO_CISPO = ClipConfig(eps_low=0.2, eps_high=0.2)
 
 
 def _config(
@@ -119,6 +127,15 @@ def test_fixture_files_declare_pinned_provenance() -> None:
     assert trl["upstream_version"] == "v1.8.0"
     assert trl["upstream_commit"] == TRL_COMMIT
     assert TRL_COMMIT in trl["permalink"]
+    verl_reimpl = _load("verl_reimpl_losses.json")["provenance"]
+    assert verl_reimpl["kind"] == "reimplementation"
+    assert verl_reimpl["upstream_commit"] == VERL_COMMIT
+    for variant, fragment in (
+        ("gspo", "core_algos.py#L1538-L1611"),
+        ("cispo", "core_algos.py#L2006-L2064"),
+    ):
+        assert VERL_COMMIT in verl_reimpl["permalinks"][variant]
+        assert verl_reimpl["permalinks"][variant].endswith(fragment)
 
 
 def test_verl_token_mean_pg_clip_agrees_with_polgrad_on_fixtures() -> None:
@@ -182,6 +199,122 @@ def test_trl_dr_grpo_agrees_with_polgrad_token_sum_norm_on_fixtures() -> None:
         recorded_loss, recorded_grad = _recorded(case)
         assert math.isclose(loss, recorded_loss, rel_tol=RTOL, abs_tol=ATOL)
         assert_close(grad, recorded_grad, rtol=RTOL, atol=ATOL)
+
+
+def test_verl_cispo_agrees_with_polgrad_cispo_on_fixtures() -> None:
+    """polgrad CISPO (registry config at verl's pinned clip) equals the reimplementation.
+
+    Agreement case to fp64 tolerance, loss and gradient, on the recorded fixtures. The
+    registry ``cispo`` entry ships the paper's one-sided IS-weight clip (eps_low=None;
+    MiniMax-M1 imposes no lower bound, arXiv 2506.13585), while verl's pinned
+    ActorConfig defaults clamp two-sided with clip_ratio_low = clip_ratio_high = 0.2 —
+    a config-level (not semantic) difference, bridged by dataclasses.replace. verl's
+    default token-mean aggregation equals polgrad Aggregation.TOKEN_MEAN exactly, and
+    its ±20 log-ratio clamp never binds on the fixture distribution
+    (|log-ratio gap| <= 2).
+    """
+    config = replace(ALGORITHMS["cispo"].loss, clip=CLIP_VERL_GSPO_CISPO)
+    _assert_agreement("verl_reimpl_losses.json", "cispo", config)
+
+
+def test_verl_gspo_agrees_with_polgrad_sequence_ratio_on_seeded_batches() -> None:
+    """polgrad GSPO (RatioKind.SEQUENCE at verl's pinned clip) matches the
+    reimplementation on row-constant advantages, up to the registered row epsilon.
+
+    Two pinned-default differences from the GSPO paper, both handled here:
+
+    - clip widths: the paper sets 3e-4/4e-4 (the registry ``gspo`` values); verl's
+      ActorConfig pins clip_ratio_low = clip_ratio_high = 0.2 — config-level, bridged
+      by dataclasses.replace.
+    - aggregation: verl hardcodes agg_loss('seq-mean-token-mean'), whose rows divide
+      by (L_b + 1e-8) instead of L_b (DEVIATIONS[1]); the loss assertion therefore
+      compares the reimplementation against the epsilon-deflated prediction from
+      polgrad's per-token-objective row sums, and the gradient against polgrad's
+      row-rescaled by L_b/(L_b + 1e-8), both to fp64.
+
+    Advantages are row-constant (the papers' per-sequence group-normalized setting):
+    verl's ratio is the GSPO-token sg[] form, whose gradient equals
+    RatioKind.SEQUENCE's exactly in that case; per-token advantages are covered by
+    test_verl_gspo_gradient_is_token_local_gspo_token_form. The upstream
+    clamp(max=10.0) on the combined log ratio never binds on the sampled distribution.
+    """
+    config = replace(ALGORITHMS["gspo"].loss, clip=CLIP_VERL_GSPO_CISPO)
+    saw_gap = False
+    for seed in (11, 23, 47, 91):
+        case = harness._sample_case((4, 8), torch.Generator().manual_seed(seed), torch.float64)
+        advantages = case["advantages"][:, :1].expand_as(case["logprobs"]).contiguous()
+
+        logprobs = case["logprobs"].clone().requires_grad_(True)
+        result = policy_loss(
+            config,
+            logprobs=logprobs,
+            old_logprobs=case["old_logprobs"],
+            advantages=advantages,
+            response_mask=case["response_mask"],
+        )
+        (polgrad_grad,) = torch.autograd.grad(result.loss, logprobs)
+
+        verl_logprobs = case["logprobs"].clone().requires_grad_(True)
+        verl_loss = VENDORED[("verl", "gspo")](
+            logprobs=verl_logprobs,
+            old_logprobs=case["old_logprobs"],
+            advantages=advantages,
+            response_mask=case["response_mask"],
+        )
+        (verl_grad,) = torch.autograd.grad(verl_loss, verl_logprobs)
+
+        lengths = case["response_mask"].sum(dim=1).to(torch.float64)
+        batch = float(case["response_mask"].shape[0])
+        row_sums = result.per_token_objective.detach().sum(dim=1)
+        predicted = float((row_sums / (lengths + 1e-8)).sum() / batch)
+        assert math.isclose(predicted, float(verl_loss.detach()), rel_tol=RTOL, abs_tol=ATOL)
+        scale = (lengths / (lengths + 1e-8)).unsqueeze(1)
+        assert_close(polgrad_grad * scale, verl_grad, rtol=RTOL, atol=ATOL)
+        exact = float(result.loss.detach())
+        if not math.isclose(exact, float(verl_loss.detach()), rel_tol=RTOL, abs_tol=ATOL):
+            saw_gap = True
+    assert saw_gap, "epsilon deflation never separated from the exact value at fp64"
+
+
+def test_verl_gspo_gradient_is_token_local_gspo_token_form() -> None:
+    """verl's gspo ratio is the paper's GSPO-token eq. 14 form, not the eq. 7 one.
+
+    Demonstrates DEVIATIONS[3] on the fixtures' per-token advantages: the
+    reimplementation's recorded loss equals the epsilon-deflated prediction from
+    polgrad's row sums (RatioKind.SEQUENCE and SEQUENCE_TOKEN share the loss value),
+    while its recorded gradient equals RatioKind.SEQUENCE_TOKEN's — row-rescaled by
+    L_b/(L_b + 1e-8), the agg_loss epsilon of DEVIATIONS[1] — and differs from
+    RatioKind.SEQUENCE's row-coupled gradient.
+    """
+    token_config = replace(ALGORITHMS["gspo_token"].loss, clip=CLIP_VERL_GSPO_CISPO)
+    sequence_config = replace(ALGORITHMS["gspo"].loss, clip=CLIP_VERL_GSPO_CISPO)
+    for case in _load("verl_reimpl_losses.json")["variants"]["gspo"]:
+        tensors = _tensors(case)
+        recorded_loss, recorded_grad = _recorded(case)
+        lengths = tensors["response_mask"].sum(dim=1).to(torch.float64)
+        batch = float(tensors["response_mask"].shape[0])
+        scale = (lengths / (lengths + 1e-8)).unsqueeze(1)
+
+        logprobs = tensors["logprobs"].clone().requires_grad_(True)
+        token_result = policy_loss(
+            token_config,
+            logprobs=logprobs,
+            old_logprobs=tensors["old_logprobs"],
+            advantages=tensors["advantages"],
+            response_mask=tensors["response_mask"],
+        )
+        (token_grad,) = torch.autograd.grad(token_result.loss, logprobs)
+        row_sums = token_result.per_token_objective.detach().sum(dim=1)
+        predicted = float((row_sums / (lengths + 1e-8)).sum() / batch)
+        assert math.isclose(predicted, recorded_loss, rel_tol=RTOL, abs_tol=ATOL)
+        assert_close(token_grad * scale, recorded_grad, rtol=RTOL, atol=ATOL)
+
+        sequence_loss, sequence_grad = _polgrad_loss_and_grad(sequence_config, tensors)
+        assert math.isclose(
+            sequence_loss, float(token_result.loss.detach()), rel_tol=RTOL, abs_tol=ATOL
+        )
+        rel = float((sequence_grad * scale - recorded_grad).norm()) / float(recorded_grad.norm())
+        assert rel > 1e-3, f"sequence-ratio gradient unexpectedly matches: rel diff {rel}"
 
 
 def test_verl_token_sum_norm_deviates_from_dr_grpo_by_norm_len_over_padded_len() -> None:
@@ -275,6 +408,7 @@ def test_fixture_outputs_match_live_vendored_wrappers() -> None:
     """
     for fixture, framework in (
         ("verl_losses.json", "verl"),
+        ("verl_reimpl_losses.json", "verl"),
         ("openrlhf_losses.json", "openrlhf"),
         ("trl_reimpl_losses.json", "trl"),
     ):
@@ -521,6 +655,25 @@ def test_trl_reimplementation_provenance_documented() -> None:
     assert "v1.8.0" in doc
     assert TRL_COMMIT in doc
     assert "grpo_trainer.py#L2857-L3016" in doc
+
+
+def test_verl_reimplementation_provenance_documented() -> None:
+    """Both verl reimplementations name the commit, permalink, file hash, and label.
+
+    The frozen upstream file SHA256 is the one already recorded in the vendored
+    ``verl_core_algos.py`` header (same file, same commit).
+    """
+    upstream_sha256 = "9114f9e16c87e4c9ebf2fa016baf733c9bbc819766b53c8968aaa9e8abcd7916"
+    for fn, fragment in (
+        (harness._verl_gspo_loss, "core_algos.py#L1538-L1611"),
+        (harness._verl_cispo_loss, "core_algos.py#L2006-L2064"),
+    ):
+        doc = fn.__doc__
+        assert doc is not None
+        assert "reimplementation" in doc
+        assert VERL_COMMIT in doc
+        assert fragment in doc
+        assert upstream_sha256 in doc
 
 
 @given(batch=logprob_batches(max_b=6, max_t=8, max_gap=1.5))

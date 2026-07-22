@@ -40,3 +40,13 @@ arithmetic is reproduced verbatim from trl/trainer/grpo_trainer.py
 52d9a6c1e298df35d0da4a6fa17874d750ee627f6ac15393c8860d74d1ba4917).
 Copyright 2020-2026 The HuggingFace Team. All rights reserved.
 Licensed under the Apache License, Version 2.0.
+
+This product also contains labeled reimplementations (not vendored code) of
+verl's GSPO and CISPO policy losses in src/polgrad/conformance/harness.py
+(_verl_gspo_loss and _verl_cispo_loss), whose arithmetic is reproduced verbatim
+from compute_policy_loss_gspo and compute_policy_loss_cispo in
+verl/trainer/ppo/core_algos.py (https://github.com/volcengine/verl) at the same
+pinned commit 74a718a492092312f1004fe25369975137388849 (upstream file SHA256
+9114f9e16c87e4c9ebf2fa016baf733c9bbc819766b53c8968aaa9e8abcd7916).
+Copyright 2024 Bytedance Ltd. and/or its affiliates.
+Licensed under the Apache License, Version 2.0.

@@ -20,6 +20,14 @@ Registered keys:
   ``GRPOTrainer`` via :func:`_trl_grpo_loss`, a faithful **reimplementation** (TRL's
   loss is entangled with trainer state and cannot be vendored as a pure function; see
   the provenance in that function's docstring). It is never presented as vendored code.
+- ``("verl", "gspo" | "cispo")``: verl's ``compute_policy_loss_gspo`` and
+  ``compute_policy_loss_cispo`` at the same pinned verl commit, via
+  :func:`_verl_gspo_loss` and :func:`_verl_cispo_loss` — faithful
+  **reimplementations**, never presented as vendored code (both upstream functions
+  assert on and read a verl ``ActorConfig``, so they were dropped from the vendored
+  file; every config default frozen here is documented in the function docstrings).
+  Their aggregation calls the vendored ``verl_core_algos.agg_loss``, which is
+  byte-identical to upstream at that commit.
 
 :func:`compare_losses` runs two such callables on seeded random inputs and reports the
 worst relative loss/gradient differences; :func:`deviation_report` compares a polgrad
@@ -211,6 +219,224 @@ def _trl_grpo_loss(
     )
 
 
+def _verl_gspo_loss(
+    logprobs: Tensor,
+    old_logprobs: Tensor,
+    advantages: Tensor,
+    response_mask: Tensor,
+    *,
+    clip_ratio_low: float = _CLIP_EPS,
+    clip_ratio_high: float = _CLIP_EPS,
+) -> Tensor:
+    """Faithful reimplementation of verl ``compute_policy_loss_gspo`` (policy term).
+
+    Provenance (this is a reimplementation, not vendored code — the upstream function
+    asserts ``isinstance(config, ActorConfig)`` and reads its clip fields and
+    ``config.global_batch_info``, so it was dropped from the vendored file; see the
+    drop list in ``polgrad/conformance/_vendor/verl_core_algos.py``):
+
+    - Upstream: https://github.com/volcengine/verl (redirects to
+      https://github.com/verl-project/verl), commit
+      ``74a718a492092312f1004fe25369975137388849`` (the vendored verl pin).
+    - Source: ``verl/trainer/ppo/core_algos.py``, ``compute_policy_loss_gspo``;
+      permalink
+      https://github.com/verl-project/verl/blob/74a718a492092312f1004fe25369975137388849/verl/trainer/ppo/core_algos.py#L1538-L1611
+      (upstream file SHA256
+      ``9114f9e16c87e4c9ebf2fa016baf733c9bbc819766b53c8968aaa9e8abcd7916``, the same
+      hash recorded in the vendored file's header).
+    - The reproduced arithmetic is Copyright 2024 Bytedance Ltd. and/or its
+      affiliates. Licensed under the Apache License, Version 2.0. See also the verl
+      entry in the repository-level ``NOTICE`` file.
+
+    Frozen config defaults (each read from ``config`` upstream; pinned to the defaults
+    of ``ActorConfig`` in ``verl/workers/config/actor.py`` at the same commit, which
+    ``verl/trainer/config/actor/actor.yaml`` mirrors):
+
+    - ``clip_ratio_low = 0.2`` and ``clip_ratio_high = 0.2`` (``ActorConfig`` fields;
+      actor.yaml lines 39/42). Both default non-``None``, so upstream's fallback to
+      ``config.clip_ratio`` (default 0.2, actor.yaml line 36) never fires.
+    - ``config.global_batch_info = {}`` (the ``ActorConfig`` dataclass default,
+      ``field(default_factory=dict)``). Upstream expands it into ``agg_loss`` and the
+      trainer populates it per training step with ``dp_size`` / ``batch_num_tokens`` /
+      ``global_batch_size`` for parallelism-invariant aggregation — runtime batch
+      state with no pure-function equivalent. Frozen at the empty default, ``agg_loss``
+      runs with ``dp_size=1`` and batch statistics from the local batch, the same
+      single-process semantics as the vendored ``compute_policy_loss`` wrappers.
+
+    Reimplemented scope, keeping upstream variable names (``negative_approx_kl``,
+    ``log_seq_importance_ratio``, ``pg_losses1``/``pg_losses2``) and arithmetic
+    verbatim: the GSPO-token combined ratio ``s_{i,t}`` with its exact stop-gradient
+    structure (arXiv 2507.18071 eq. 14) ``log s_{i,t} = log_prob - sg[log_prob] +
+    sg[mean masked log-ratio]``, clamped at ``max=10.0``; the clipped surrogate
+    ``max(-A·s, -A·clamp(s, 1-ε_lo, 1+ε_hi))``; aggregation through the vendored
+    ``agg_loss`` with the **hardcoded** upstream mode ``"seq-mean-token-mean"`` (the
+    upstream ``loss_agg_mode`` parameter is ignored by the loss, so this
+    reimplementation does not take one).
+
+    Omitted upstream surface (nothing else is): the ``rollout_is_weights`` multiplier
+    (defaults ``None`` upstream) and the returned ``pg_metrics`` dict of detached
+    diagnostics (``pg_clipfrac``, ``ppo_kl``, ``pg_clipfrac_lower``) — only
+    ``pg_loss`` is reproduced.
+
+    Args:
+        logprobs: ``[B, T]`` current-policy logprobs (upstream ``log_prob``,
+            differentiable).
+        old_logprobs: ``[B, T]`` behavior-policy logprobs (upstream ``old_log_prob``).
+        advantages: ``[B, T]`` per-token advantages, as upstream.
+        response_mask: ``[B, T]`` bool mask (converted to the logprob dtype for
+            upstream's float-mask arithmetic).
+        clip_ratio_low: Frozen ``ActorConfig.clip_ratio_low`` (upstream default 0.2).
+        clip_ratio_high: Frozen ``ActorConfig.clip_ratio_high`` (upstream default 0.2).
+
+    Returns:
+        Scalar loss tensor, differentiable in ``logprobs``.
+
+    References:
+        verl permalink above; arXiv 2507.18071 eq. 13-14 (GSPO-token);
+        docs/derivations/losses.md (GSPO gradients from the sg[] algebra);
+        tests/test_conformance.py::test_verl_gspo_agrees_with_polgrad_sequence_ratio_on_seeded_batches,
+        tests/test_conformance.py::test_verl_gspo_gradient_is_token_local_gspo_token_form,
+        tests/test_conformance.py::test_verl_reimplementation_provenance_documented.
+    """
+    log_prob = logprobs
+    old_log_prob = old_logprobs
+    response_mask = response_mask.to(logprobs.dtype)
+
+    negative_approx_kl = log_prob - old_log_prob
+    # sequence-level importance ratio: s_i(θ) = exp[(1/|y_i|) Σ_t log-ratio_t]
+    seq_lengths = torch.sum(response_mask, dim=-1).clamp(min=1)
+    negative_approx_kl_seq = torch.sum(negative_approx_kl * response_mask, dim=-1) / seq_lengths
+    # detach (upstream): the GSPO-token combined ratio freezes both the sequence weight
+    # (sg[s_i]) and the token denominator (sg[log_prob]), leaving the token-local
+    # gradient sg[s_i]·∇logprob_t (arXiv 2507.18071 eq. 14):
+    # log(s_i,t(θ)) = sg[log(s_i(θ))] + log_prob - sg[log_prob]
+    log_seq_importance_ratio = (
+        log_prob - log_prob.detach() + negative_approx_kl_seq.detach().unsqueeze(-1)
+    )
+    log_seq_importance_ratio = torch.clamp(
+        log_seq_importance_ratio, max=10.0
+    )  # clamp for numerical stability (upstream literal)
+    seq_importance_ratio = torch.exp(log_seq_importance_ratio)
+
+    pg_losses1 = -advantages * seq_importance_ratio
+    pg_losses2 = -advantages * torch.clamp(
+        seq_importance_ratio, 1 - clip_ratio_low, 1 + clip_ratio_high
+    )
+    pg_losses = torch.maximum(pg_losses1, pg_losses2)
+
+    # upstream hardcodes "seq-mean-token-mean" (its loss_agg_mode parameter is unused
+    # by the loss); global_batch_info frozen to the ActorConfig default {}.
+    pg_loss: Tensor = verl_core_algos.agg_loss(
+        loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode="seq-mean-token-mean"
+    )
+    return pg_loss
+
+
+def _verl_cispo_loss(
+    logprobs: Tensor,
+    old_logprobs: Tensor,
+    advantages: Tensor,
+    response_mask: Tensor,
+    *,
+    clip_ratio_low: float = _CLIP_EPS,
+    clip_ratio_high: float = _CLIP_EPS,
+    loss_agg_mode: str = "token-mean",
+) -> Tensor:
+    """Faithful reimplementation of verl ``compute_policy_loss_cispo`` (policy term).
+
+    Provenance (this is a reimplementation, not vendored code — the upstream function
+    asserts ``isinstance(config, ActorConfig)`` and reads its clip fields and
+    ``config.global_batch_info``, so it was dropped from the vendored file; see the
+    drop list in ``polgrad/conformance/_vendor/verl_core_algos.py``):
+
+    - Upstream: https://github.com/volcengine/verl (redirects to
+      https://github.com/verl-project/verl), commit
+      ``74a718a492092312f1004fe25369975137388849`` (the vendored verl pin).
+    - Source: ``verl/trainer/ppo/core_algos.py``, ``compute_policy_loss_cispo``;
+      permalink
+      https://github.com/verl-project/verl/blob/74a718a492092312f1004fe25369975137388849/verl/trainer/ppo/core_algos.py#L2006-L2064
+      (upstream file SHA256
+      ``9114f9e16c87e4c9ebf2fa016baf733c9bbc819766b53c8968aaa9e8abcd7916``, the same
+      hash recorded in the vendored file's header).
+    - The reproduced arithmetic is Copyright 2024 Bytedance Ltd. and/or its
+      affiliates. Licensed under the Apache License, Version 2.0. See also the verl
+      entry in the repository-level ``NOTICE`` file.
+
+    Frozen config defaults (each read from ``config`` upstream; pinned to the defaults
+    of ``ActorConfig`` in ``verl/workers/config/actor.py`` at the same commit, which
+    ``verl/trainer/config/actor/actor.yaml`` mirrors):
+
+    - ``clip_ratio_low = 0.2`` and ``clip_ratio_high = 0.2`` (``ActorConfig`` fields;
+      actor.yaml lines 39/42). Both default non-``None``, so upstream's fallback to
+      ``config.clip_ratio`` (default 0.2, actor.yaml line 36) never fires. Note the
+      resulting IS-weight clamp is **two-sided** — the CISPO paper (arXiv 2506.13585)
+      imposes no lower bound in its experiments.
+    - ``loss_agg_mode = "token-mean"`` (the upstream parameter default, equal to
+      ``ActorConfig.loss_agg_mode``).
+    - ``config.global_batch_info = {}`` (the ``ActorConfig`` dataclass default,
+      ``field(default_factory=dict)``); frozen exactly as in :func:`_verl_gspo_loss`
+      (the trainer-populated contents are runtime batch state).
+
+    Reimplemented scope, keeping upstream variable names (``negative_approx_kl``,
+    ``ratio``, ``clipped_ratio_sg``, ``pg_losses``) and arithmetic verbatim: the
+    log-ratio clamp at ``±20.0``; ``clipped_ratio = clamp(ratio, 1-ε_lo, 1+ε_hi)``
+    detached in full (upstream ``clipped_ratio_sg``), so the gradient flows only
+    through the REINFORCE factor ``log_prob`` in
+    ``pg_losses = -clipped_ratio_sg · advantages · log_prob`` (arXiv 2506.13585
+    eq. 5); aggregation through the vendored ``agg_loss``.
+
+    Omitted upstream surface (nothing else is): the ``rollout_is_weights`` multiplier
+    (defaults ``None`` upstream) and the returned ``pg_metrics`` dict of detached
+    diagnostics (``pg_clipfrac``, ``ppo_kl``, ``pg_clipfrac_lower``) — only
+    ``pg_loss`` is reproduced.
+
+    Args:
+        logprobs: ``[B, T]`` current-policy logprobs (upstream ``log_prob``,
+            differentiable).
+        old_logprobs: ``[B, T]`` behavior-policy logprobs (upstream ``old_log_prob``).
+        advantages: ``[B, T]`` per-token advantages, as upstream.
+        response_mask: ``[B, T]`` bool mask (converted to the logprob dtype for
+            upstream's float-mask arithmetic).
+        clip_ratio_low: Frozen ``ActorConfig.clip_ratio_low`` (upstream default 0.2).
+        clip_ratio_high: Frozen ``ActorConfig.clip_ratio_high`` (upstream default 0.2).
+        loss_agg_mode: ``agg_loss`` mode (upstream default ``"token-mean"``).
+
+    Returns:
+        Scalar loss tensor, differentiable in ``logprobs``.
+
+    References:
+        verl permalink above; arXiv 2506.13585 eq. 4-5 (CISPO);
+        docs/derivations/losses.md (CISPO stop-gradient semantics);
+        tests/test_conformance.py::test_verl_cispo_agrees_with_polgrad_cispo_on_fixtures,
+        tests/test_conformance.py::test_verl_reimplementation_provenance_documented.
+    """
+    log_prob = logprobs
+    old_log_prob = old_logprobs
+    response_mask = response_mask.to(logprobs.dtype)
+
+    # importance sampling ratio: π_θ / π_θ_old
+    negative_approx_kl = log_prob - old_log_prob
+    negative_approx_kl = torch.clamp(
+        negative_approx_kl, min=-20.0, max=20.0
+    )  # clamp for numerical stability (upstream literals)
+    ratio = torch.exp(negative_approx_kl)
+
+    clipped_ratio = torch.clamp(ratio, 1 - clip_ratio_low, 1 + clip_ratio_high)
+    # detach (upstream ``clipped_ratio_sg``): CISPO stop-gradients the clipped IS
+    # weight; gradients flow only through log_prob in the loss term (arXiv 2506.13585
+    # eq. 5).
+    clipped_ratio_sg = clipped_ratio.detach()
+
+    # CISPO loss (to minimize): L = -sg[clip(ratio)] * A * log_prob
+    pg_losses = -clipped_ratio_sg * advantages * log_prob
+
+    # global_batch_info frozen to the ActorConfig default {}.
+    pg_loss: Tensor = verl_core_algos.agg_loss(
+        loss_mat=pg_losses, loss_mask=response_mask, loss_agg_mode=loss_agg_mode
+    )
+    return pg_loss
+
+
 def _verl_pg_clip(loss_agg_mode: str) -> LossFn:
     """Wrapper factory over vendored verl ``compute_policy_loss`` + ``agg_loss``.
 
@@ -283,17 +509,45 @@ def _trl_variant(loss_type: str) -> LossFn:
     return fn
 
 
+def _verl_gspo(
+    *, logprobs: Tensor, old_logprobs: Tensor, advantages: Tensor, response_mask: Tensor
+) -> Tensor:
+    """Wrapper over the verl GSPO reimplementation (pinned defaults only)."""
+    return _verl_gspo_loss(logprobs, old_logprobs, advantages, response_mask)
+
+
+def _verl_cispo(
+    *, logprobs: Tensor, old_logprobs: Tensor, advantages: Tensor, response_mask: Tensor
+) -> Tensor:
+    """Wrapper over the verl CISPO reimplementation (pinned defaults only)."""
+    return _verl_cispo_loss(logprobs, old_logprobs, advantages, response_mask)
+
+
 VENDORED: dict[tuple[str, str], LossFn] = {
     ("verl", "pg_clip_token_mean"): _verl_pg_clip("token-mean"),
     ("verl", "pg_clip_seq_mean_token_mean"): _verl_pg_clip("seq-mean-token-mean"),
     ("verl", "pg_clip_seq_mean_token_sum"): _verl_pg_clip("seq-mean-token-sum"),
     ("verl", "pg_clip_seq_mean_token_sum_norm"): _verl_pg_clip("seq-mean-token-sum-norm"),
+    ("verl", "gspo"): _verl_gspo,
+    ("verl", "cispo"): _verl_cispo,
     ("openrlhf", "pg_clip_token_mean"): _openrlhf_pg_clip(token_level_loss=True),
     ("openrlhf", "pg_clip_seq_mean_token_mean"): _openrlhf_pg_clip(token_level_loss=False),
     ("trl", "grpo"): _trl_variant("grpo"),
     ("trl", "bnpo"): _trl_variant("bnpo"),
     ("trl", "dr_grpo"): _trl_variant("dr_grpo"),
 }
+
+# VENDORED keys whose callables are labeled reimplementations, not vendored code (the
+# TRL loss reads trainer state; verl's GSPO/CISPO read a verl ActorConfig).
+_REIMPLEMENTED: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("trl", "grpo"),
+        ("trl", "bnpo"),
+        ("trl", "dr_grpo"),
+        ("verl", "gspo"),
+        ("verl", "cispo"),
+    }
+)
 
 
 def _sample_case(
@@ -455,7 +709,7 @@ def deviation_report(
 
     Returns:
         :class:`DeviationReport` with notes naming the config and framework variant
-        (and the reimplementation caveat for TRL).
+        (and the reimplementation caveat for the TRL and verl gspo/cispo entries).
 
     Raises:
         ValueError: If ``(framework, variant)`` is not in ``VENDORED``, or propagated
@@ -494,5 +748,11 @@ def deviation_report(
         notes = (
             *notes,
             "TRL entry is a faithful reimplementation (trl v1.8.0), not vendored code.",
+        )
+    elif key in _REIMPLEMENTED:
+        notes = (
+            *notes,
+            f"verl {variant} entry is a faithful reimplementation "
+            f"(commit 74a718a4), not vendored code.",
         )
     return replace(report, notes=notes)
