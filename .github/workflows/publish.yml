@@ -1,8 +1,9 @@
 name: publish
 
+# Requires a PyPI trusted publisher registered for this repo/workflow/environment
+# (pypi.org -> project polgrad -> Publishing). Manual-only until that exists;
+# releases are currently uploaded with a project-scoped API token instead.
 on:
-  release:
-    types: [published]
   workflow_dispatch:
 
 jobs:
