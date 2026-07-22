@@ -1,0 +1,61 @@
+name: Upstream drift
+
+on:
+  schedule:
+    # Weekly, Monday 05:43 UTC (fixed odd minute to avoid the top-of-hour rush).
+    - cron: "43 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check upstream drift
+        id: drift
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          python tools/check_upstream_drift.py | tee drift-report.txt
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          # 0 (no drift) and 3 (drift) are verdicts; anything else fails the job.
+          if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then
+            exit "$code"
+          fi
+      - name: Open or update drift issue
+        if: steps.drift.outputs.exit_code == '3'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh label create upstream-drift --force \
+            --repo "$GITHUB_REPOSITORY" \
+            --description "Tracked upstream definitions drifted from their pins" \
+            --color D93F0B
+          {
+            echo "\`tools/check_upstream_drift.py\` found drift between the pinned"
+            echo "upstream commits and the current default-branch HEADs on $(date -u +%Y-%m-%d)."
+            echo
+            echo '```'
+            cat drift-report.txt
+            echo '```'
+          } > issue-body.md
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --label upstream-drift --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file issue-body.md
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "Upstream drift detected: $(date -u +%Y-%m-%d)" \
+              --label upstream-drift \
+              --body-file issue-body.md
+          fi
