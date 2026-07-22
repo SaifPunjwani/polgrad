@@ -53,7 +53,7 @@ from polgrad.registry import (
 from polgrad.registry import describe as describe_algorithm
 from polgrad.registry import get as get_algorithm
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "ALGORITHMS",

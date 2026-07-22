@@ -127,9 +127,11 @@ gap = logprob_mismatch(trainer_logprobs, rollout_logprobs, mask) # k1/k2/k3 drif
 print(ess.summary()); print(gap.summary())
 ```
 
-`examples/diagnose_run.py` synthesizes a 200-step run with injected pathologies
-(rollout↔trainer drift, entropy collapse, length bias) and shows each detector firing at
-the injection point.
+Entropy diagnostics accept either sampled-token logprobs (the Monte Carlo estimator,
+valid on-policy) or exact per-token entropies computed from full logits — the docs derive
+when each is valid. `examples/diagnose_run.py` synthesizes a 200-step run with injected
+pathologies (rollout↔trainer drift, entropy collapse, length bias) and shows each
+detector firing at the injection point.
 
 ## Verification as public API
 
@@ -157,6 +159,23 @@ for d in DEVIATIONS:
     print(f"{d.framework} {d.version}: {d.description}")
 ```
 
+A weekly scheduled job re-fetches the tracked upstream loss functions at HEAD and diffs
+them against the pins (`tools/check_upstream_drift.py`), so framework churn becomes a
+detected, filed event rather than silent rot.
+
+For framework and trainer authors, `polgrad.testing` turns conformance into a test:
+
+```python
+from polgrad.testing import assert_conforms
+
+def test_my_grpo_matches_the_paper():
+    assert_conforms(my_loss_fn, "grpo")   # seeded batches; compares loss and gradients
+```
+
+It installs as a pytest plugin (a `polgrad_batches` fixture ships with the package), and
+`assert_conforms` raises with the full deviation report — max loss/gradient differences
+and the worst-case seed — when semantics drift.
+
 ## Every claim is machine-checked
 
 The derivation pages in `docs/` state each identity and link the test that enforces it.
@@ -177,9 +196,9 @@ A selection:
 | entropy changepoint test has exact permutation level ≤ α | [entropy.md](docs/diagnostics/entropy.md) | `tests/test_diagnostics_entropy.py` |
 | all ten registry algorithms optimize a bandit to convergence | [variants.md](docs/derivations/variants.md) | `tests/test_cross.py` |
 
-The suite is 516 tests — analytic goldens, Hypothesis property tests over ragged masked
+The suite is 554 tests — analytic goldens, Hypothesis property tests over ragged masked
 batches, fp64 gradcheck, and seeded Monte Carlo with CLT-derived tolerances — and runs in
-about ten seconds serially on a laptop CPU (measured 10.7s; about five seconds with
+about fourteen seconds serially on a laptop CPU (measured 13.8s; a few seconds with
 `pytest -n auto`, the CI invocation).
 
 ## What polgrad is not
