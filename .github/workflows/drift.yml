@@ -25,7 +25,9 @@ jobs:
         run: |
           set +e
           python tools/check_upstream_drift.py | tee drift-report.txt
-          code=$?
+          # PIPESTATUS[0], not $?: $? would be tee's status (always 0), which would
+          # silently suppress every drift report.
+          code=${PIPESTATUS[0]}
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           # 0 (no drift) and 3 (drift) are verdicts; anything else fails the job.
           if [ "$code" -ne 0 ] && [ "$code" -ne 3 ]; then
