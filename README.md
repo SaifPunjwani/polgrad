@@ -1,6 +1,9 @@
 # polgrad
 
 [![CI](https://github.com/SaifPunjwani/polgrad/actions/workflows/ci.yml/badge.svg)](https://github.com/SaifPunjwani/polgrad/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/polgrad)](https://pypi.org/project/polgrad/)
+[![Python](https://img.shields.io/pypi/pyversions/polgrad)](https://pypi.org/project/polgrad/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 Reference semantics, conformance testing, and pathology diagnostics for LLM
 policy-gradient post-training. Pure functions over tensors: no trainers, no models, no
@@ -151,7 +154,9 @@ Demonstrated differences are registered in `polgrad.conformance.DEVIATIONS` — 
 carries the pytest node id that demonstrates it, and the wording is deliberately neutral:
 these are *deviations between published equations and shipped defaults*, not bug reports.
 Frameworks make defensible engineering choices; the point is that the choices are
-currently invisible.
+currently invisible. [docs/conformance.md](docs/conformance.md) documents the whole
+mechanism: what a comparison certifies, every registered target and deviation, the
+testing API, and drift detection.
 
 ```python
 from polgrad.conformance import DEVIATIONS, deviation_report
@@ -161,7 +166,10 @@ for d in DEVIATIONS:
 
 A weekly scheduled job re-fetches the tracked upstream loss functions at HEAD and diffs
 them against the pins (`tools/check_upstream_drift.py`), so framework churn becomes a
-detected, filed event rather than silent rot.
+detected, filed event rather than silent rot. Findings land in `CHANGELOG.md` under
+*Upstream findings* — the first one is already recorded: TRL's `GRPOTrainer._compute_loss`
+changed after the pinned v1.8.0, and the three loss-type branches polgrad models are
+byte-identical, so conformance results are unaffected.
 
 For framework and trainer authors, `polgrad.testing` turns conformance into a test:
 

@@ -4,6 +4,22 @@ Framework-behavior findings (conformance deviations, upstream changes detected a
 vendored snapshots) are recorded here alongside library changes, versioned by the pin
 they were observed at.
 
+## Unreleased
+
+### Upstream findings
+
+- **TRL** (detected 2026-07-22 by `tools/check_upstream_drift.py`, `main` at
+  `8697378709103` vs the v1.8.0 pin `95809b942eb5`): `GRPOTrainer._compute_loss`
+  changed. The three `loss_type` branches polgrad reimplements (`grpo`, `bnpo`,
+  `dr_grpo`) are byte-identical, so conformance results are unaffected. The single
+  loss-path change is a `clamp(min=1.0)` guard on the `num_items_in_batch` normalizer
+  in the `["cispo", "dapo", "vespo"]` branch; the remaining changes replace
+  per-process metric means with cross-process reductions, altering logged `kl`,
+  `entropy`, and `clip_ratio/*` values (not the loss). Upstream has also added
+  `luspo` and `vespo` loss types, which polgrad does not yet model.
+- **verl** (`main` at `a07d3e32d2b4`) and **OpenRLHF** (`bc71bb19464a`): all tracked
+  definitions unchanged against their pins.
+
 ## 0.2.0 — 2026-07-18
 
 - `polgrad.testing`: `assert_conforms` and deterministic `random_batches` for

@@ -140,6 +140,15 @@ def _trl_grpo_loss(
     - The reproduced arithmetic is Copyright 2020-2026 The HuggingFace Team. All
       rights reserved. Licensed under the Apache License, Version 2.0. See also the
       TRL entry in the repository-level ``NOTICE`` file.
+    - Re-verified against TRL ``main`` at commit ``8697378709103`` (2026-07-22):
+      ``GRPOTrainer._compute_loss`` has changed since the pin, but the three
+      ``loss_type`` branches reimplemented here are byte-identical. The one loss-path
+      change is ``normalizer = inputs["num_items_in_batch"].clamp(min=1.0)`` in the
+      ``["cispo", "dapo", "vespo"]`` branch, which this reimplementation does not
+      cover; the remaining changes are metric logging (per-process means replaced by
+      cross-process reductions). Upstream has also added ``luspo`` and ``vespo`` loss
+      types, which are not reimplemented here. Recorded in ``CHANGELOG.md``; detected
+      by ``tools/check_upstream_drift.py``.
 
     Reimplemented scope, keeping upstream variable names (``coef_1``, ``coef_2``,
     ``per_token_loss``) and upstream arithmetic verbatim:
