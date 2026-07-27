@@ -13,25 +13,26 @@ GPU requirement, no dependency beyond PyTorch.
 
 The RL post-training stack does not agree on what "the GRPO loss" is. The same batch of
 `(logprobs, old_logprobs, advantages, response_mask)` produces materially different losses
-and gradients depending on which framework — and which framework *version* — computes it:
+and gradients depending on which framework computes it, and on which version of that
+framework:
 
 - TRL's `GRPOTrainer` aggregated per-sequence-then-batch (the GRPO paper equation) in
   v0.14–v0.15, then switched its default to global token normalization in v0.16.0
   ([trl#2881](https://github.com/huggingface/trl/pull/2881); see
   [trl#2995](https://github.com/huggingface/trl/issues/2995) for the debate that switch
-  sparked — resolved for KL logging only in
+  sparked, resolved for KL logging only in
   [trl#3004](https://github.com/huggingface/trl/pull/3004)). Both defaults are still in
-  the wild, and current TRL defaults to `loss_type="dapo"` — token-mean over the global
+  the wild. Current TRL defaults to `loss_type="dapo"`: token-mean over the global
   gradient-accumulated batch.
 - verl ships four aggregation modes; its Dr.GRPO-style mode divides by the *current padded
   length* where the Dr.GRPO paper's released code divides by a fixed generation budget
   ([arXiv:2503.20783](https://arxiv.org/abs/2503.20783)). polgrad's conformance suite
   measures the exact factor.
 - The k3 KL estimator, differentiated as a loss term, does not propagate the gradient of
-  the KL it estimates — its pathwise gradient is biased for the stated objective
+  the KL it estimates. Its pathwise gradient is biased for the stated objective
   ([arXiv:2512.21852](https://arxiv.org/abs/2512.21852),
-  [arXiv:2510.01555](https://arxiv.org/abs/2510.01555)) — yet k3-as-loss is a common
-  configuration.
+  [arXiv:2510.01555](https://arxiv.org/abs/2510.01555)). k3-as-loss is a common
+  configuration anyway.
 - Rollout engines report logprobs that differ from the trainer's recompute, silently
   making "on-policy" training off-policy; frameworks patched in truncated
   importance-sampling corrections ([verl#2953](https://github.com/volcengine/verl/pull/2953)).
@@ -41,8 +42,8 @@ implicit defaults. polgrad makes each one an explicit, typed, tested object.
 
 ## What disagreement looks like
 
-One ragged batch — 4 sequences of lengths (2, 4, 6, 8), identical tensors into every row
-of this table (`examples/which_grpo_am_i_running.py` prints it, measured, on every run):
+One ragged batch of 4 sequences with lengths (2, 4, 6, 8), and the same tensors into every
+row of this table. `examples/which_grpo_am_i_running.py` prints it, measured, on every run:
 
 | configuration | loss | grad mass, L=2 seq | grad mass, L=8 seq |
 | --- | --- | --- | --- |
@@ -53,8 +54,8 @@ of this table (`examples/which_grpo_am_i_running.py` prints it, measured, on eve
 
 A 2× loss difference and opposite length-weighting of gradients, from settings frameworks
 treat as interchangeable defaults. The same script cross-checks polgrad against the
-vendored verl and OpenRLHF implementations (agreement to 0 or ~1e-10, each residual
-explained) so the table is evidence, not assertion.
+vendored verl and OpenRLHF implementations and prints the agreement: 0 or ~1e-10, with
+each residual explained.
 
 ## Install
 
@@ -69,7 +70,8 @@ Python ≥ 3.10, PyTorch ≥ 2.1, CPU is enough.
 ## The loss algebra
 
 Every named variant is a frozen config over
-`ratio kind × surrogate × clip × aggregation × KL placement`, not a separate code path:
+`ratio kind × surrogate × clip × aggregation × KL placement`. One code path evaluates all
+of them:
 
 ```python
 import torch
@@ -101,26 +103,26 @@ for cfg in (grpo_paper, trl_016_default):
     print(f"{cfg.aggregation.value:>24}  loss={out.loss.item():+.6f}")
 ```
 
-Ten algorithms ship as registry entries with every constant traced to its paper or the
-paper's released code — and explicit `notes` where the paper is silent:
+Ten algorithms ship as registry entries. Every constant is traced to its paper or the
+paper's released code, with explicit `notes` where the paper is silent:
 
 ```python
 from polgrad import ALGORITHMS, describe_algorithm
-print(describe_algorithm("dapo"))     # clip-higher eps, token-mean, no KL — with sources
+print(describe_algorithm("dapo"))     # clip-higher eps, token-mean, no KL, with sources
 print(sorted(ALGORITHMS))
 # ['cispo', 'dapo', 'dr_grpo', 'grpo', 'grpo_tis', 'gspo', 'gspo_token', 'ppo', 'reinforce_pp', 'rloo']
 ```
 
 `polgrad.aggregate.effective_token_weights` returns the closed-form per-token gradient
-weight each aggregation mode induces — including the micro-batch/gradient-accumulation
-weights, whose inequivalence to full-batch aggregation is computed exactly rather than
-discovered in production.
+weight each aggregation mode induces. That includes the micro-batch and
+gradient-accumulation weights, so their inequivalence to full-batch aggregation is
+computed exactly instead of being discovered in production.
 
 ## Diagnostics
 
 Metrics for the failure modes RL post-training actually exhibits, computed from tensors a
-training loop already has. Every threshold has a documented null distribution with a
-Monte Carlo test calibrating it — no magic constants:
+training loop already has. Every threshold has a documented null distribution and a Monte
+Carlo test that calibrates it:
 
 ```python
 from polgrad.diagnostics import importance_ess, logprob_mismatch, clip_report, entropy_trend
@@ -131,7 +133,7 @@ print(ess.summary()); print(gap.summary())
 ```
 
 Entropy diagnostics accept either sampled-token logprobs (the Monte Carlo estimator,
-valid on-policy) or exact per-token entropies computed from full logits — the docs derive
+valid on-policy) or exact per-token entropies computed from full logits. The docs derive
 when each is valid. `examples/diagnose_run.py` synthesizes a 200-step run with injected
 pathologies (rollout↔trainer drift, entropy collapse, length bias) and shows each
 detector firing at the injection point.
@@ -140,9 +142,9 @@ detector firing at the injection point.
 
 `polgrad.verify` exports the harness the library is tested with, so a new variant gets
 falsifiable checks for free: fp64 `gradcheck` over ragged batches, central
-finite-difference comparison against a *supplied analytic formula* (this catches wrong
-derivations, not just wrong code), a softmax bandit with closed-form policy gradient and
-KL, and hand-derived golden cases whose arithmetic is written out in
+finite-difference comparison against a *supplied analytic formula*, which fails on a
+wrong derivation as well as on wrong code, a softmax bandit with closed-form policy
+gradient and KL, and hand-derived golden cases whose arithmetic is written out in
 [docs/derivations/goldens.md](docs/derivations/goldens.md).
 
 ## Conformance
@@ -150,13 +152,13 @@ KL, and hand-derived golden cases whose arithmetic is written out in
 `src/polgrad/conformance/_vendor/` contains loss functions vendored verbatim from verl and
 OpenRLHF at pinned commits, with SHA256-enforced provenance headers; TRL is represented by
 a labeled reimplementation pinned to a version. Recorded fixtures keep CI framework-free.
-Demonstrated differences are registered in `polgrad.conformance.DEVIATIONS` — each entry
-carries the pytest node id that demonstrates it, and the wording is deliberately neutral:
-these are *deviations between published equations and shipped defaults*, not bug reports.
-Frameworks make defensible engineering choices; the point is that the choices are
-currently invisible. [docs/conformance.md](docs/conformance.md) documents the whole
-mechanism: what a comparison certifies, every registered target and deviation, the
-testing API, and drift detection.
+Demonstrated differences are registered in `polgrad.conformance.DEVIATIONS`, and each
+entry carries the pytest node id that demonstrates it. The wording is neutral by policy:
+an entry describes a *difference between a published equation and a shipped default*.
+Entries are not bug reports. Frameworks make defensible engineering choices; the problem
+is that the choices are currently invisible to the person training a model.
+[docs/conformance.md](docs/conformance.md) documents the mechanism: what a comparison
+certifies, every registered target and deviation, the testing API, and drift detection.
 
 ```python
 from polgrad.conformance import DEVIATIONS, deviation_report
@@ -164,12 +166,12 @@ for d in DEVIATIONS:
     print(f"{d.framework} {d.version}: {d.description}")
 ```
 
-A weekly scheduled job re-fetches the tracked upstream loss functions at HEAD and diffs
-them against the pins (`tools/check_upstream_drift.py`), so framework churn becomes a
-detected, filed event rather than silent rot. Findings land in `CHANGELOG.md` under
-*Upstream findings* — the first one is already recorded: TRL's `GRPOTrainer._compute_loss`
-changed after the pinned v1.8.0, and the three loss-type branches polgrad models are
-byte-identical, so conformance results are unaffected.
+A weekly scheduled job re-fetches the tracked upstream loss functions at HEAD, diffs them
+against the pins (`tools/check_upstream_drift.py`), and files an issue when a tracked
+definition has changed. Findings land in `CHANGELOG.md` under *Upstream findings*. The
+first one is already recorded: TRL's `GRPOTrainer._compute_loss` changed after the pinned
+v1.8.0, and the three loss-type branches polgrad models are byte-identical, so conformance
+results are unaffected.
 
 For framework and trainer authors, `polgrad.testing` turns conformance into a test:
 
@@ -180,9 +182,9 @@ def test_my_grpo_matches_the_paper():
     assert_conforms(my_loss_fn, "grpo")   # seeded batches; compares loss and gradients
 ```
 
-It installs as a pytest plugin (a `polgrad_batches` fixture ships with the package), and
-`assert_conforms` raises with the full deviation report — max loss/gradient differences
-and the worst-case seed — when semantics drift.
+It installs as a pytest plugin, so a `polgrad_batches` fixture ships with the package.
+When semantics drift, `assert_conforms` raises with the full deviation report: maximum
+loss and gradient differences, and the worst-case seed.
 
 ## Every claim is machine-checked
 
@@ -204,16 +206,16 @@ A selection:
 | entropy changepoint test has exact permutation level ≤ α | [entropy.md](docs/diagnostics/entropy.md) | `tests/test_diagnostics_entropy.py` |
 | all ten registry algorithms optimize a bandit to convergence | [variants.md](docs/derivations/variants.md) | `tests/test_cross.py` |
 
-The suite is 554 tests — analytic goldens, Hypothesis property tests over ragged masked
-batches, fp64 gradcheck, and seeded Monte Carlo with CLT-derived tolerances — and runs in
+The suite is 554 tests: analytic goldens, Hypothesis property tests over ragged masked
+batches, fp64 gradcheck, and seeded Monte Carlo with CLT-derived tolerances. It runs in
 about fourteen seconds serially on a laptop CPU (measured 13.8s; a few seconds with
 `pytest -n auto`, the CI invocation).
 
-## What polgrad is not
+## Scope
 
-Not a trainer, not a serving stack, not a framework critique, and not a benchmark. It
-never runs your training loop. It defines what the equations say, measures what
-implementations do, and gives you instruments for the gap.
+polgrad is not a trainer, a serving stack, a benchmark, or a critique of any framework.
+It never runs your training loop and never loads a model. It computes losses, gradients,
+advantages, KL estimates, and diagnostics from tensors you pass in.
 
 ## References
 
