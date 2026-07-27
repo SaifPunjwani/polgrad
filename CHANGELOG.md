@@ -4,7 +4,37 @@ Framework-behavior findings (conformance deviations, upstream changes detected a
 vendored snapshots) are recorded here alongside library changes, versioned by the pin
 they were observed at.
 
-## Unreleased
+## 0.2.1 — 2026-07-26
+
+No library code changed; `polgrad` 0.2.1 is functionally identical to 0.2.0.
+
+### Packaging
+
+- Added `Homepage` and `Documentation` project URLs, and the
+  `Operating System :: OS Independent`, `Programming Language :: Python :: 3 :: Only`,
+  and `Topic :: Software Development :: Testing` classifiers.
+- Republished so the PyPI project page carries the current README (the 0.2.0 page
+  predated the PyPI, Python-version, and license badges and the `docs/conformance.md`
+  pointer).
+
+### Documentation and repository
+
+- `docs/conformance.md`: what a conformance comparison certifies and what it excludes,
+  the full table of registered targets and deviations, the `polgrad.testing` API, and
+  how drift detection works.
+- Added `SECURITY.md`, issue forms under `.github/ISSUE_TEMPLATE/`, and a pull request
+  template.
+- Editorial pass over `README.md`, `CONTRIBUTING.md`, and `docs/conformance.md`. No
+  technical claim or measured number changed.
+
+### Fixed
+
+- `.github/workflows/drift.yml` read `$?` after a pipe into `tee`, so it always saw
+  `tee`'s exit status. Every drift report would have been suppressed. It now reads
+  `${PIPESTATUS[0]}`.
+- `.github/workflows/publish.yml` triggered on `release: published` without a PyPI
+  trusted publisher registered, so it would fail on every release. It is manual-only
+  until the publisher exists.
 
 ### Upstream findings
 
