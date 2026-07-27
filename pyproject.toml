@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "polgrad"
-version = "0.2.0"
+version = "0.2.1"
 description = "Reference semantics, conformance testing, and pathology diagnostics for LLM policy-gradient post-training"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,16 +20,21 @@ keywords = [
     "ppo",
     "llm",
 ]
+# No "License :: ..." classifier: PEP 639 forbids pairing one with the SPDX
+# ``license`` expression above, and build backends reject the combination.
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Testing",
     "Typing :: Typed",
 ]
 dependencies = ["torch>=2.1"]
@@ -46,6 +51,8 @@ dev = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/SaifPunjwani/polgrad"
+Documentation = "https://github.com/SaifPunjwani/polgrad/tree/main/docs"
 Repository = "https://github.com/SaifPunjwani/polgrad"
 Issues = "https://github.com/SaifPunjwani/polgrad/issues"
 Changelog = "https://github.com/SaifPunjwani/polgrad/blob/main/CHANGELOG.md"
