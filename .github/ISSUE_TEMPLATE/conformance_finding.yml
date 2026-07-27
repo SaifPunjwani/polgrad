@@ -1,0 +1,62 @@
+name: Conformance finding
+description: A framework's shipped loss differs from the published equation, or from polgrad's model of it.
+labels: ["conformance"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Findings are recorded in neutral wording: a deviation is a difference between a
+        published equation and a shipped default. Entries are not defect reports against
+        the framework. See `docs/conformance.md`.
+
+  - type: input
+    id: framework
+    attributes:
+      label: Framework and version or commit
+      placeholder: "verl, main at 74a718a4920923"
+    validations:
+      required: true
+
+  - type: input
+    id: symbol
+    attributes:
+      label: Function or config path
+      placeholder: "verl/trainer/ppo/core_algos.py::compute_policy_loss_gspo"
+    validations:
+      required: true
+
+  - type: textarea
+    id: difference
+    attributes:
+      label: The difference
+      description: >
+        State the published equation, state what the code computes, and give the exact
+        factor or term between them where you can. Link the paper and a permalink to the
+        upstream line.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: >
+        A script that runs both and prints the gap, or a test that fails. Loss and
+        per-token gradient both matter; a difference can be invisible in the loss and
+        present in the gradient.
+      render: python
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What differs
+      multiple: true
+      options:
+        - Loss value
+        - Per-token gradient
+        - Only under specific advantages, masks, or padding
+        - Only a logged metric, not the loss
+    validations:
+      required: true

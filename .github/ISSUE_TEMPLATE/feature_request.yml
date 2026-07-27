@@ -1,0 +1,56 @@
+name: New variant or diagnostic
+description: Propose a loss variant, KL estimator, advantage estimator, or diagnostic.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        polgrad only ships semantics that are traceable to a source and checkable by a
+        test. `CONTRIBUTING.md` lists what a change of each kind has to carry.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - Loss variant or surrogate
+        - Aggregation mode
+        - KL estimator or placement
+        - Advantage estimator
+        - Registry algorithm
+        - Diagnostic
+        - Conformance target (new framework or function)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: definition
+    attributes:
+      label: Definition
+      description: >
+        The per-token objective, written out. For a diagnostic, the statistic and its null
+        distribution.
+    validations:
+      required: true
+
+  - type: input
+    id: source
+    attributes:
+      label: Source
+      description: >
+        Paper, arXiv id, or the released code the constants come from. If the source is
+        silent on a default, say which one and what the ambiguity is.
+    validations:
+      required: true
+
+  - type: textarea
+    id: checks
+    attributes:
+      label: What would make it falsifiable
+      description: >
+        The equivalences or invariances it should satisfy, any closed form it can be
+        checked against, and a golden case if you have one. A diagnostic needs a Monte
+        Carlo test calibrating its threshold.
+    validations:
+      required: true

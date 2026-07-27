@@ -1,0 +1,67 @@
+name: Bug report
+description: A polgrad function returns the wrong value, the wrong gradient, or raises when it should not.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A wrong number is the most serious kind of bug this library can have. Please give
+        the smallest tensor input that shows it.
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: A self-contained script. Seed every random tensor, and use float64 if the difference is small.
+      render: python
+      placeholder: |
+        import torch
+        from polgrad import PolicyLossConfig, policy_loss
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result, and where it comes from
+      description: >
+        The value you expected and the source: a paper equation, a framework's output, a
+        hand derivation, or a docs/ page. If it is a hand derivation, show the arithmetic.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Paste the output or the traceback.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: polgrad version
+      description: "`python -c \"import polgrad; print(polgrad.__version__)\"`"
+    validations:
+      required: true
+
+  - type: input
+    id: env
+    attributes:
+      label: Python, PyTorch, and OS
+      description: "`python -c \"import sys, torch; print(sys.version, torch.__version__)\"`"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I read `docs/conventions.md` and the difference is not a shape, masking, sign, or dtype convention.
+          required: true
+        - label: I checked whether the behaviour is an already registered entry in `polgrad.conformance.DEVIATIONS`.
+          required: true
